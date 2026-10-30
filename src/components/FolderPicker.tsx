@@ -5,7 +5,7 @@ import { api } from '../api.ts'
 import { basename, scratchDir } from '../folders.ts'
 import { machineOf, machines, severalMachines } from '../machines.ts'
 import { FileBrowser, formatBytes } from './FileBrowser.tsx'
-import { GitSummary } from './GitSummary.tsx'
+import { GitSummaryButton } from './GitSummary.tsx'
 import { confirmBy, showError } from './Popover.tsx'
 import { ltr, plural } from './ui.tsx'
 
@@ -188,7 +188,7 @@ export function FolderPicker(props: {
                             {/* The status drops under the name when the row's too narrow for both. */}
                             <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3">
                               <FolderName folder={folder} onHide={(button) => hide(folder, button)} />
-                              <GitSummary git={c.git} branch class="shrink-0 text-meta" />
+                              <GitSummaryButton git={c.git} path={c.path} branch class="shrink-0 text-meta" />
                             </div>
                             <Size path={c.path} machine={props.machine} />
                           </Row>
@@ -209,7 +209,7 @@ export function FolderPicker(props: {
                               </Show>
                             </span>
                             <Show when={!isDeleting(c.path)} fallback={<span class="shrink-0 text-meta text-fg-3">Deleting…</span>}>
-                              <GitSummary git={c.git} class="shrink-0 text-meta" />
+                              <GitSummaryButton git={c.git} path={c.path} class="shrink-0 text-meta" />
                             </Show>
                           </div>
                           <Size path={c.path} machine={props.machine} />

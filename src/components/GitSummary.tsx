@@ -1,7 +1,8 @@
-import { createEffect, createSignal, For, onCleanup, onMount, Show, type Component } from 'solid-js'
-import { ArrowDown, ArrowDownToLine, ArrowUp, CloudOff, GitBranch, GitMerge } from '../icons'
+import { For, Show, type Component } from 'solid-js'
+import { ArrowDown, ArrowDownToLine, ArrowUp, Check, CloudOff, GitBranch, GitMerge, Pencil } from '../icons'
 import type { GitStatus } from '../../shared/protocol.ts'
-import { DiffCount } from './ui.tsx'
+import { showBy } from './Popover.tsx'
+import { DiffCount, ltr, plural } from './ui.tsx'
 
 export interface GitPart {
   text: string
@@ -31,38 +32,13 @@ export function gitParts(g: GitStatus, hide?: 'ahead' | 'behind'): GitPart[] {
 
 /**
  * How a checkout stands, the same wherever one is shown: its branch, what's
- * uncommitted, and then only what isn't in step. Nothing after the branch
- * means there's nothing to do. `hide` leaves out what a button beside it says.
- * Short of room for the words, each part shrinks to an icon and its number.
+ * uncommitted, and then only what isn't in step, each as its icon and number.
+ * Nothing after the branch means there's nothing to do. `hide` leaves out what
+ * a button beside it says. GitDetail spells each one out.
  */
 export function GitSummary(props: { git: GitStatus; branch?: boolean; hide?: 'ahead' | 'behind'; class?: string }) {
-  const parts = () => gitParts(props.git, props.hide)
-
-  // Words while nothing is cut short by them. To see whether they'd fit again, they're put back and measured
-  // before the page is drawn, so they never show cut off.
-  let el!: HTMLSpanElement
-  const [compact, setCompact] = createSignal(false)
-  const cut = () => [el, ...el.querySelectorAll<HTMLElement>('.truncate')].some((e) => e.scrollWidth > e.clientWidth)
-  const fit = () => {
-    if (!el.isConnected) return
-    setCompact(false)
-    if (cut()) setCompact(true)
-  }
-  onMount(() => {
-    const observer = new ResizeObserver(fit)
-    observer.observe(el)
-    // The room it's given, which can grow while it stays the size of its icons.
-    observer.observe(el.closest('.\\@container') ?? document.documentElement)
-    onCleanup(() => observer.disconnect())
-  })
-  createEffect(() => {
-    parts()
-    props.git.branch
-    fit()
-  })
-
   return (
-    <span ref={el} class={`flex min-w-0 items-center gap-2 whitespace-nowrap ${props.class ?? ''}`}>
+    <span class={`flex min-w-0 items-center gap-2 whitespace-nowrap ${props.class ?? ''}`}>
       <Show when={props.branch}>
         {/* At the least, its icon: down to that, rather than spill over what's next to it. */}
         <span class="flex min-w-3.5 items-center gap-1 font-mono text-fg-2">
@@ -71,23 +47,74 @@ export function GitSummary(props: { git: GitStatus; branch?: boolean; hide?: 'ah
         </span>
       </Show>
       <DiffCount files={props.git.changes} added={props.git.added} removed={props.git.removed} class="shrink-0" />
-      <For each={parts()}>
+      <For each={gitParts(props.git, props.hide)}>
         {(p) => (
-          <Show
-            when={compact()}
-            fallback={
-              <span class={`min-w-0 truncate ${p.tone}`} title={p.title}>
-                {p.text}
-              </span>
-            }
-          >
-            <span class={`flex shrink-0 items-center gap-0.5 tabular-nums ${p.tone}`} title={`${p.text}: ${p.title}`}>
-              <p.icon class="size-3.5" />
-              {p.count}
-            </span>
-          </Show>
+          <span class={`flex shrink-0 items-center gap-0.5 tabular-nums ${p.tone}`} title={`${p.text}: ${p.title}`}>
+            <p.icon class="size-3.5" />
+            {p.count}
+          </span>
         )}
       </For>
     </span>
+  )
+}
+
+/** Everything the summary says in icons, spelled out: the branch and where it is, what's uncommitted, and each part in words. */
+export function GitDetail(props: { git: GitStatus; path?: string; class?: string }) {
+  const g = () => props.git
+  return (
+    <div class={`flex flex-col gap-2 text-ui ${props.class ?? ''}`}>
+      <div class="min-w-0">
+        <div class="flex items-center gap-1.5 font-mono text-fg">
+          <GitBranch class="size-3.5 shrink-0 text-fg-3" />
+          <span class="truncate">{g().branch || 'Detached HEAD'}</span>
+        </div>
+        <Show when={props.path}>
+          <div class="mt-0.5 truncate text-left font-mono text-meta text-fg-3 [direction:rtl]">{ltr(props.path!)}</div>
+        </Show>
+      </div>
+      <div class="flex items-center gap-2">
+        <Pencil class="size-3.5 shrink-0 text-fg-3" />
+        <Show when={g().changes} fallback={<span class="text-fg-3">Nothing uncommitted</span>}>
+          <span class="text-fg-2">
+            {plural(g().changes, 'file')} uncommitted <DiffCount files={g().changes} added={g().added} removed={g().removed} class="ml-1" />
+          </span>
+        </Show>
+      </div>
+      <Show when={g().upstream && !g().ahead && !g().behind}>
+        <div class="flex items-center gap-2 text-fg-3">
+          <Check class="size-3.5 shrink-0" />
+          In step with {g().upstream}
+        </div>
+      </Show>
+      <For each={gitParts(g())}>
+        {(p) => (
+          <div class="flex items-start gap-2">
+            <p.icon class={`mt-0.5 size-3.5 shrink-0 ${p.tone}`} />
+            <div class="min-w-0">
+              <div class={p.tone}>{p.text}</div>
+              <div class="text-xs leading-snug text-fg-3">{p.title}</div>
+            </div>
+          </div>
+        )}
+      </For>
+    </div>
+  )
+}
+
+/** The summary as a button that floats its detail by it, for where a click on it would otherwise pick what it's in. */
+export function GitSummaryButton(props: { git: GitStatus; path?: string; branch?: boolean; class?: string }) {
+  return (
+    <button
+      type="button"
+      title="Git status"
+      onClick={(e) => {
+        e.stopPropagation()
+        showBy(e.currentTarget, 'Git status', () => <GitDetail git={props.git} path={props.path} />)
+      }}
+      class={`-mx-1 min-w-0 rounded-md px-1 py-0.5 transition-colors hover:bg-bg ${props.class ?? ''}`}
+    >
+      <GitSummary git={props.git} branch={props.branch} />
+    </button>
   )
 }

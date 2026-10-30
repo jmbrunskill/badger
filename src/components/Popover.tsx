@@ -161,6 +161,11 @@ export function askBy(anchor: Anchor, ask: { label: string; value?: string; plac
   })
 }
 
+/** Floats something to read by the control that shows it, until clicked away from or Escape. */
+export function showBy(anchor: Anchor, label: string, panel: () => JSX.Element, width = 320) {
+  float(anchor, { width, role: 'dialog', label, modal: false }, panel)
+}
+
 /**
  * Says something didn't work, by what was tried, until it's dismissed. The detail can be selected to copy; when
  * it's lines of output, from git say, it's monospace and scrolls.

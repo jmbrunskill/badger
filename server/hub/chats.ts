@@ -145,6 +145,7 @@ export class Chats {
         machine,
         lastModified: s.lastModified,
         running: !!live?.running,
+        ...(live?.running && live.since ? { runningSince: live.since } : {}),
         archived: archived.has(s.sessionId),
         gone: !live && !!s.cwd && !!gone.get(machine ?? '')?.has(s.cwd),
         ...(reviews.has(s.sessionId) ? { review: true } : {}),

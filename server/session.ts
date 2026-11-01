@@ -48,6 +48,8 @@ export class LiveSession {
   compacting?: number
   /** Any background work is running, the subagents' own included; closing the process would kill it. */
   busy = false
+  /** When it started working, while it is: the chat list shows how long it's been at it. */
+  workingSince?: number
 
   private queue = new MessageQueue()
   private agent: Query
@@ -366,6 +368,7 @@ export class LiveSession {
       // The chat list shows a chat waiting on background work as working.
       if (busy !== this.busy) {
         this.busy = busy
+        this.noteWorking()
         this.onChange()
       }
       // A running subagent's own tasks show inside it. One that has paused to wait on them isn't in the set, so they show here.
@@ -448,12 +451,18 @@ export class LiveSession {
     if (!running && !this.busy) this.idleTimer = setTimeout(() => this.close(), IDLE_CLOSE_MS)
     if (running === this.running) return
     this.running = running
+    this.noteWorking()
     this.emitStatus()
     this.onChange()
     if (!running) {
       // Outside this call stack: a callback may close this session.
       for (const fn of this.afterTurnCallbacks.splice(0)) setImmediate(fn)
     }
+  }
+
+  private noteWorking(): void {
+    if (!this.working) this.workingSince = undefined
+    else this.workingSince ??= Date.now()
   }
 
   private setCwd(cwd: string): void {

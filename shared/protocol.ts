@@ -90,6 +90,8 @@ export interface SessionSummary {
   machine?: string
   lastModified: number
   running: boolean
+  /** When it started running, while it is; ms since epoch. */
+  runningSince?: number
   /** Hidden from the sidebar's main list. Archiving never deletes the transcript. */
   archived: boolean
   /** Its directory no longer exists, e.g. a removed worktree. */

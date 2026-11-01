@@ -68,6 +68,8 @@ export interface LiveInfo {
   cwd: string
   /** Taking a turn, or waiting on background work it started. */
   running: boolean
+  /** When it started running, while it is; ms since epoch, by the runner's clock. */
+  since?: number
   /** A permission prompt or question is waiting on the user. */
   waiting: boolean
   /** How many of its turns have ended (not counting ones queued messages carried on), since the runner started. */
@@ -375,6 +377,7 @@ const liveInfo = z.object({
   id: chatId,
   cwd: text(4096),
   running: z.boolean(),
+  since: z.number().optional(),
   waiting: z.boolean(),
   turns: count,
   agents: z.array(nestedChat).max(1000).optional(),

@@ -1,8 +1,9 @@
-import { Show } from 'solid-js'
+import { Show, createSignal, onCleanup } from 'solid-js'
 import type { Card, SessionSummary } from '../../shared/protocol.ts'
 import { attention } from '../attention.ts'
 import { folderLabel } from '../folders.ts'
 import { isOnline, onMachine } from '../machines.ts'
+import { duration } from '../transcript/model.ts'
 import { ChatDot } from './ui.tsx'
 
 /**
@@ -23,6 +24,7 @@ export function ChatSummary(props: {
     <>
       <div class="flex items-center gap-2">
         <span class={`min-w-0 flex-1 truncate text-ui ${props.titleClass}`}>{s().title}</span>
+        <Show when={s().running && s().runningSince}>{(since) => <Working since={since()} />}</Show>
         <ChatDot running={s().running} attention={attention()[s().id]} />
       </div>
       <div class={`mt-0.5 flex gap-1.5 text-meta text-fg-3 tabular-nums ${props.metaClass ?? ''}`}>
@@ -32,6 +34,28 @@ export function ChatSummary(props: {
         <span class={`ml-auto shrink-0 ${props.timeClass ?? ''}`}>{when(s().lastModified)}</span>
       </div>
     </>
+  )
+}
+
+/** Ticks every second for every <Working> on the page, while there's one. */
+const [now, setNow] = createSignal(Date.now())
+let ticking = 0
+let timer: ReturnType<typeof setInterval> | undefined
+
+/** How long a chat has been working, once that's a minute: one at it a while may have stalled. */
+function Working(props: { since: number }) {
+  if (!ticking++) {
+    setNow(Date.now())
+    timer = setInterval(() => setNow(Date.now()), 1000)
+  }
+  onCleanup(() => {
+    if (!--ticking) clearInterval(timer)
+  })
+  const seconds = () => Math.floor((now() - props.since) / 1000)
+  return (
+    <Show when={seconds() >= 60}>
+      <span class="shrink-0 text-meta text-fg-3 tabular-nums">{duration(seconds())}</span>
+    </Show>
   )
 }
 

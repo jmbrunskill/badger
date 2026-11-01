@@ -223,6 +223,7 @@ export class Runner implements RunnerApi {
       id: s.id,
       cwd: s.cwd,
       running: this.manager.isRunning(s.id),
+      since: s.workingSince,
       waiting: s.waiting,
       turns: this.turns.get(s.id) ?? 0,
       agents: s.runningAgents(),

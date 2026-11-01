@@ -3,7 +3,6 @@ import type { Card, SessionSummary } from '../../shared/protocol.ts'
 import { attention } from '../attention.ts'
 import { folderLabel } from '../folders.ts'
 import { isOnline, onMachine } from '../machines.ts'
-import { duration } from '../transcript/model.ts'
 import { ChatDot } from './ui.tsx'
 
 /**
@@ -37,24 +36,26 @@ export function ChatSummary(props: {
   )
 }
 
-/** Ticks every second for every <Working> on the page, while there's one. */
+/** Ticks every few seconds for every <Working> on the page, while there's one: often enough to turn each minute over on time. */
 const [now, setNow] = createSignal(Date.now())
 let ticking = 0
 let timer: ReturnType<typeof setInterval> | undefined
 
-/** How long a chat has been working, once that's a minute: one at it a while may have stalled. */
+/** How long a chat has been working, in minutes, once that's one: one at it a while may have stalled. */
 function Working(props: { since: number }) {
   if (!ticking++) {
     setNow(Date.now())
-    timer = setInterval(() => setNow(Date.now()), 1000)
+    timer = setInterval(() => setNow(Date.now()), 5000)
   }
   onCleanup(() => {
     if (!--ticking) clearInterval(timer)
   })
-  const seconds = () => Math.floor((now() - props.since) / 1000)
+  const minutes = () => Math.floor((now() - props.since) / 60_000)
   return (
-    <Show when={seconds() >= 60}>
-      <span class="shrink-0 text-meta text-fg-3 tabular-nums">{duration(seconds())}</span>
+    <Show when={minutes() >= 1}>
+      <span class="shrink-0 text-meta text-fg-3 tabular-nums">
+        {minutes() >= 60 ? `${Math.floor(minutes() / 60)}h ${minutes() % 60}m` : `${minutes()}m`}
+      </span>
     </Show>
   )
 }

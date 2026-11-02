@@ -64,7 +64,11 @@ export const viewKey = (v: View) =>
 export const sessionOf = (v: View) =>
   v.kind === 'task' || v.kind === 'plan' || v.kind === 'attachment' || v.kind === 'btw' || v.kind === 'diff' || v.kind === 'file' ? v.session : undefined
 
-export type Group = { type: 'group'; id: string; views: View[]; active?: string }
+/**
+ * A tab group. One with no tabs isn't drawn, but keeps its place and size for the next view of a kind it's
+ * held, listed in `kinds`, so a set-up comes back as things are opened again.
+ */
+export type Group = { type: 'group'; id: string; views: View[]; active?: string; kinds?: View['kind'][] }
 export type Leaf = { type: 'chat' } | Group
 export type Split = { type: 'split'; dir: 'row' | 'col'; children: Node[]; sizes: number[] }
 export type Node = Leaf | Split
@@ -79,6 +83,8 @@ export interface Layout {
   narrow?: number
   /** The chats last opened here, latest first. Only theirs keep their tasks, plans and attachments. */
   recent?: string[]
+  /** When a chat was last opened here, so a new workspace can start from the latest one's arrangement. */
+  used?: number
 }
 
 /** How many chats in a workspace keep their own panels while they're away. */
@@ -137,6 +143,8 @@ export const groupsOf = (n: Node) => leaves(n).filter((l): l is Group => l.type 
 export const groupOf = (n: Node, key: string) => groupsOf(n).find((g) => g.views.some((v) => viewKey(v) === key))
 export const viewsOf = (n: Node) => groupsOf(n).flatMap((g) => g.views)
 /** The tab showing: the one picked, if it's still there, else the first. */
+/** The kinds of view a group holds or has held, which are what it's kept for while it's empty. */
+export const kindsOf = (g: Group): View['kind'][] => [...new Set([...(g.kinds ?? []), ...g.views.map((v) => v.kind)])]
 export const activeOf = (g: Group) => (g.views.some((v) => viewKey(v) === g.active) ? g.active! : viewKey(g.views[0]))
 
 function mapGroups(n: Node, f: (g: Group) => Group): Node {
@@ -144,14 +152,17 @@ function mapGroups(n: Node, f: (g: Group) => Group): Node {
   return n.type === 'group' ? f(n) : n
 }
 
-/** Drops empty groups, unwraps splits left with one child and folds splits into a parent going the same way. */
-function normalize(n: Node): Node {
+/**
+ * Unwraps splits left with one child and folds splits into a parent going the same way. Empty groups stay, as
+ * places for views to come back to, unless `drop` says they're done with.
+ */
+function normalize(n: Node, drop?: (g: Group) => boolean): Node {
   if (n.type !== 'split') return n
   const children: Node[] = []
   const sizes: number[] = []
   n.children.forEach((c, i) => {
-    const k = normalize(c)
-    if (k.type === 'group' && !k.views.length) return
+    const k = normalize(c, drop)
+    if (k.type === 'group' && !k.views.length && drop?.(k)) return
     if (k.type === 'split' && k.dir === n.dir) {
       k.children.forEach((g, j) => (children.push(g), sizes.push(n.sizes[i] * k.sizes[j])))
     } else {
@@ -165,8 +176,15 @@ function normalize(n: Node): Node {
   return { ...n, children, sizes: sizes.map((s) => s / total) }
 }
 
-export function removeView(tree: Node, key: string): Node {
-  return normalize(mapGroups(tree, (g) => (g.views.some((v) => viewKey(v) === key) ? { ...g, views: g.views.filter((v) => viewKey(v) !== key) } : g)))
+/** Takes a view out of its group, which keeps its kind for another of them unless `remember` is false. */
+export function removeView(tree: Node, key: string, remember = true): Node {
+  return normalize(
+    mapGroups(tree, (g) => {
+      if (!g.views.some((v) => viewKey(v) === key)) return g
+      const views = g.views.filter((v) => viewKey(v) !== key)
+      return { ...g, views, kinds: remember ? kindsOf(g) : kindsOf({ ...g, views }) }
+    }),
+  )
 }
 
 /** Adds a view to a group, at the end or before the tab at `index`; one already there only moves if given an index. */
@@ -231,7 +249,8 @@ export function moveView(tree: Node, key: string, drop: Drop): { tree: Node; gro
   const view = from.views.find((v) => viewKey(v) === key)!
   if (drop.target === from.id && drop.zone === 'center') return { tree: addToGroup(tree, from.id, view, true, drop.index), group: from.id }
   if (drop.target === from.id && from.views.length === 1) return { tree }
-  const rest = removeView(tree, key)
+  // Dragged away, not closed: the group isn't kept for its kind, and isn't kept at all if that empties it.
+  const rest = normalize(removeView(tree, key, false), (g) => g.id === from.id)
   if (drop.zone === 'center') return { tree: addToGroup(rest, drop.target, view, true, drop.index), group: drop.target }
   return splitWith(rest, drop.target, drop.zone, [view])
 }
@@ -346,12 +365,12 @@ const sources = new WeakMap<Split, { path: number[]; index: number[] }>()
  */
 export function shownTree(tree: Node, session: string): Node {
   const mine = (v: View) => (sessionOf(v) ?? session) === session
-  if (viewsOf(tree).every(mine)) return tree
+  if (groupsOf(tree).every((g) => g.views.length && g.views.every(mine))) return tree
   const go = (n: Node, path: number[]): Node | undefined => {
     if (n.type === 'chat') return n
     if (n.type === 'group') {
       const views = n.views.filter(mine)
-      return views.length === n.views.length ? n : views.length ? { ...n, views } : undefined
+      return !views.length ? undefined : views.length === n.views.length ? n : { ...n, views }
     }
     const kept = n.children.flatMap((c, i) => {
       const k = go(c, [...path, i])
@@ -391,6 +410,21 @@ export function moveShown(tree: Node, session: string, key: string, drop: Drop):
   const index = before ? stored!.views.findIndex((v) => viewKey(v) === viewKey(before)) : stored?.views.length
   return moveView(tree, key, { ...drop, index })
 }
+
+/**
+ * Where a view goes when it isn't anywhere yet. First a group the chat sees nothing in that's held its kind,
+ * so it comes back where those were; then `into`, if the chat sees it; else a new group beside the chat.
+ */
+function place(tree: Node, session: string, view: View, into: string | undefined, edge: Edge): { tree: Node; group: string } {
+  const shown = new Set(groupsOf(shownTree(tree, session)).map((g) => g.id))
+  const slot = groupsOf(tree).find((g) => !shown.has(g.id) && kindsOf(g).includes(view.kind))
+  const to = slot?.id ?? (into && shown.has(into) ? into : undefined)
+  if (to) return { tree: addToGroup(tree, to, view), group: to }
+  return splitWith(tree, 'chat', edge, [view])
+}
+
+/** A workspace's arrangement without anything in it: what a new one starts from. */
+const emptied = (tree: Node): Node => mapGroups(tree, (g) => ({ type: 'group', id: g.id, views: [], kinds: kindsOf(g) }))
 
 // ── State, per workspace: a root on a machine ──
 
@@ -435,8 +469,15 @@ addEventListener('pagehide', () => saveTimer !== undefined && save())
 
 export const layoutOf = (ws: Ws): Layout => layouts()[wsKey(ws)] ?? EMPTY
 
+/** Where a workspace with nothing laid out yet starts: the last one used, with the panels it had but none of their views. */
+function fresh(): Layout {
+  let last: Layout | undefined
+  for (const l of Object.values(layouts())) if ((l.used ?? 0) > (last?.used ?? 0)) last = l
+  return last ? { tree: emptied(last.tree), hidden: true } : EMPTY
+}
+
 export function updateLayout(ws: Ws, change: (l: Layout) => Layout): void {
-  const before = layoutOf(ws)
+  const before = layouts()[wsKey(ws)] ?? fresh()
   const after = change(before)
   if (after === before) return
   const next = { ...layouts(), [wsKey(ws)]: after }
@@ -479,14 +520,14 @@ export function placeTerminals(ws: Ws, ids: string[]): void {
     for (const v of viewsOf(tree)) if (v.kind === 'terminal' && !live.has(v.id) && !pending.has(v.id)) tree = removeView(tree, viewKey(v))
     const placed = new Set(viewsOf(tree).map(viewKey))
     const missing = ids.filter((id) => !placed.has(`terminal:${id}`)).map((id): View => ({ kind: 'terminal', id }))
-    if (missing.length) {
-      const groups = groupsOf(tree)
-      const target = groups.find((g) => g.id === l.focus) ?? groups[0]
-      if (target) for (const v of missing) tree = addToGroup(tree, target.id, v, false)
-      else tree = splitWith(tree, 'chat', 'bottom', missing).tree
+    for (const v of missing) {
+      const shown = groupsOf(shownTree(tree, ''))
+      const placed = place(tree, '', v, (shown.find((g) => g.id === l.focus) ?? shown[0])?.id, 'bottom')
+      // Not brought to the front of tabs already showing: it wasn't asked for here.
+      tree = shown.some((g) => g.id === placed.group) ? addToGroup(tree, placed.group, v, false) : placed.tree
     }
     if (tree === l.tree) return l
-    return { ...l, tree, hidden: l.hidden || !groupsOf(tree).length }
+    return { ...l, tree, hidden: l.hidden || !viewsOf(tree).length }
   })
 }
 
@@ -503,9 +544,12 @@ export async function openTerminal(ws: Ws, session: string, cwd: string, where?:
     // The server's list may have got here first and placed it already.
     const tree = removeView(l.tree, viewKey(view))
     const groups = groupsOf(shownTree(tree, session))
-    const into = where && 'group' in where ? where.group : !where ? (groups.find((g) => g.id === l.focus) ?? groups[0])?.id : undefined
-    if (into && groups.some((g) => g.id === into)) return { ...l, tree: addToGroup(tree, into, view), focus: into, hidden: false }
-    const placed = where && 'beside' in where ? splitWith(tree, where.beside, where.edge, [view]) : splitWith(tree, 'chat', 'bottom', [view])
+    const placed =
+      where && 'beside' in where
+        ? splitWith(tree, where.beside, where.edge, [view])
+        : where && groups.some((g) => g.id === where.group)
+          ? { tree: addToGroup(tree, where.group, view), group: where.group }
+          : place(tree, session, view, (groups.find((g) => g.id === l.focus) ?? groups[0])?.id, 'bottom')
     return { ...l, tree: placed.tree, focus: placed.group, hidden: false }
   })
   setFocusRequest(viewKey(view))
@@ -521,10 +565,9 @@ export function openView(ws: Ws, view: View): void {
     const at = groupOf(l.tree, key)
     if (at) return { ...l, tree: setActive(l.tree, key), focus: at.id, hidden: false }
     // Where its chat can see it: a group holding only other chats' views is hidden there.
-    const groups = groupsOf(shownTree(l.tree, sessionOf(view) ?? ''))
-    const into = groups.find((g) => g.id === l.focus) ?? groups[0]
-    if (into) return { ...l, tree: addToGroup(l.tree, into.id, view), focus: into.id, hidden: false }
-    const placed = splitWith(l.tree, 'chat', 'right', [view])
+    const session = sessionOf(view) ?? ''
+    const groups = groupsOf(shownTree(l.tree, session))
+    const placed = place(l.tree, session, view, (groups.find((g) => g.id === l.focus) ?? groups[0])?.id, 'right')
     return { ...l, tree: placed.tree, focus: placed.group, hidden: false }
   })
   setFocusRequest(key)
@@ -548,11 +591,11 @@ export function setFileMode(ws: Ws, view: FileView, mode: 'file' | 'diff'): void
  */
 export function openedIn(ws: Ws, session: string): void {
   updateLayout(ws, (l) => {
-    if (l.recent?.[0] === session) return l
+    if (l.recent?.[0] === session) return { ...l, used: Date.now() }
     const recent = [session, ...(l.recent ?? []).filter((s) => s !== session)].slice(0, RECENT_CHATS)
     let tree = l.tree
     for (const v of viewsOf(tree)) if (sessionOf(v) && !recent.includes(sessionOf(v)!)) tree = removeView(tree, viewKey(v))
-    return { ...l, tree, recent }
+    return { ...l, tree, recent, used: Date.now() }
   })
 }
 
@@ -572,9 +615,8 @@ export function openPreview(ws: Ws, port: number, opts: { name?: string; path?: 
     }
     const view: View = { kind: 'preview', id, name: opts.name, path: opts.path }
     const into = groupsOf(l.tree).find((g) => g.views.some((v) => v.kind === 'preview'))
-    if (into) return { ...l, tree: addToGroup(l.tree, into.id, view), hidden: false }
     // Focus stays where it was, so new terminals still go with the others.
-    return { ...l, tree: splitWith(l.tree, 'chat', 'right', [view]).tree, hidden: false }
+    return { ...l, tree: place(l.tree, '', view, into?.id, 'right').tree, hidden: false }
   })
 }
 

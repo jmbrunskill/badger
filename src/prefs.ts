@@ -14,3 +14,13 @@ export function setDetail(next: Detail): void {
 }
 
 export const toggleDetail = () => setDetail(detail() === 'full' ? 'result' : 'full')
+
+const WRAP_KEY = 'badger.fileWrap'
+const [wrap, setWrapSignal] = createSignal(localStorage.getItem(WRAP_KEY) === '1')
+export { wrap }
+
+/** Whether files wrap their long lines: one setting for every file, left as it was last used in this browser. */
+export function toggleWrap(): void {
+  setWrapSignal(!wrap())
+  localStorage.setItem(WRAP_KEY, wrap() ? '1' : '0')
+}

@@ -1,9 +1,10 @@
 import { For, Index, Show, createEffect, createMemo, createResource, createSelector, createSignal, on, onMount, type JSX } from 'solid-js'
-import { RotateCw } from '../icons'
+import { RotateCw, TextWrap } from '../icons'
 import type { ReviewDiff } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { changedLines } from '../diffRows.ts'
 import { plural } from '../format.ts'
+import { toggleWrap, wrap } from '../prefs.ts'
 import { highlight, languageOf } from '../highlight.ts'
 import { CodeRow } from './CodeRow.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
@@ -17,7 +18,19 @@ const MAX_LINES = 20_000
 /** The images the server sends as images; anything else, an SVG say, comes as text. */
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i
 
+/** How much further in than its line a wrapped line's later rows start. */
+const HANG = 2
+/** Columns between tab stops: Tailwind's base styles make it 4, not the browser's 8. */
+const TAB = 4
+
 export type FileMode = 'file' | 'diff'
+
+/** How many columns text takes in monospace, its tabs taken to their stops. */
+function columns(text: string): number {
+  let col = 0
+  for (const ch of text) col = ch === '\t' ? col + TAB - (col % TAB) : col + 1
+  return col
+}
 
 /** A file's text, or why there's none to show. */
 async function readText(path: string, machine: string): Promise<{ text: string } | { error: string }> {
@@ -113,6 +126,28 @@ export function FileView(props: {
     const c = colours()
     return c && c.text === text() ? c.lines : undefined
   }
+  /**
+   * The longest line drawn, in characters with its tabs taken to their stops: the lines' width before any is laid out,
+   * since blocks off screen skip layout and so add no width of their own.
+   */
+  const widest = createMemo(() => {
+    let most = 0
+    for (const line of shown()) most = Math.max(most, columns(line))
+    return most
+  })
+  const codeClass = () => `pr-4 pl-2 text-fg ${wrap() ? 'min-w-0 flex-1 whitespace-pre-wrap break-words' : 'whitespace-pre'}`
+  /**
+   * Wrapped, a line's later rows start under its code, a step in from where it starts, so they read as part of it
+   * rather than lines of their own: its padding takes in its indent and the step, and its first row is pulled back.
+   * Tab stops are counted from the padding, not from where the first row starts, so a line with a tab in it hangs by
+   * whole stops, or its tabs would land short.
+   */
+  const codeStyle = (text: string): JSX.CSSProperties | undefined => {
+    if (!wrap()) return undefined
+    let hang = columns(text.match(/^[\t ]*/)![0]) + HANG
+    if (text.includes('\t')) hang = Math.ceil(hang / TAB) * TAB
+    return { 'padding-left': `calc(0.5rem + ${hang}ch)`, 'text-indent': `-${hang}ch` }
+  }
   const blocks = createMemo(() => {
     const out: number[] = []
     for (let i = 0; i < shown().length; i += BLOCK) out.push(i)
@@ -207,6 +242,11 @@ export function FileView(props: {
         <PaneBar class="whitespace-nowrap text-fg-3">
           {toggle()}
           {crumbs(<Show when={changed().file}>{(f) => <DiffCount files={1} added={f().added} removed={f().removed} class="shrink-0" />}</Show>)}
+          <Show when={!image()}>
+            <GhostButton title={wrap() ? 'Don’t wrap long lines' : 'Wrap long lines'} active={wrap()} aria-pressed={wrap()} onClick={toggleWrap}>
+              <TextWrap class="size-3.5" />
+            </GhostButton>
+          </Show>
           <GhostButton title="Read it again" onClick={reload} class="-mr-1.5">
             <RotateCw class={`size-3.5 ${content.loading ? 'animate-spin' : ''}`} />
           </GhostButton>
@@ -220,11 +260,18 @@ export function FileView(props: {
           <Show when={content()}>
             {(c) => (
               <Show when={'text' in c()} fallback={<p class="p-6 text-center text-fg-3">{(c() as { error: string }).error}</p>}>
-                <div ref={linesEl} class="relative min-w-max py-1 font-mono text-xs leading-5">
+                <div ref={linesEl} class={`relative py-1 font-mono text-xs leading-5 ${wrap() ? '' : 'min-w-max'}`}>
+                  {/* The number's room and the line's padding (see CodeRow) beside the longest line, as a guess at its
+                      width; lines drawn wider than their characters, as CJK and emoji are, widen it past that. */}
+                  <Show when={!wrap()}>
+                    <div style={{ width: `calc(${widest() + Math.max(4, String(shown().length).length)}ch + 2.25rem)` }} />
+                  </Show>
                   <Show when={props.onQuote}>{(q) => <QuoteSelection within={() => linesEl} onQuote={(_, range) => q()(quoted(range))} />}</Show>
                   <For each={blocks()}>
                     {(start) => (
-                      <div style={{ 'content-visibility': 'auto', 'contain-intrinsic-size': `auto ${Math.min(BLOCK, shown().length - start) * 20}px` }}>
+                      // Its height guessed until it's drawn, but no width: one length alone would be taken for both, and
+                      // a block off screen would claim to be thousands of pixels wide.
+                      <div style={{ 'content-visibility': 'auto', 'contain-intrinsic-size': `auto 0px auto ${Math.min(BLOCK, shown().length - start) * 20}px` }}>
                         {/* By place, not by text: read again with a line put in above, each row keeps its number and takes the new text. */}
                         <Index each={shown().slice(start, start + BLOCK)}>
                           {(text, i) => {
@@ -246,8 +293,8 @@ export function FileView(props: {
                                   title: added() ? 'Added' : removed() ? `${plural(removed()!, 'line')} taken out above this one` : undefined,
                                 }}
                               >
-                                <Show when={html()?.[n - 1]} fallback={<span class="whitespace-pre pr-4 pl-2 text-fg">{text()}</span>}>
-                                  {(h) => <span class="whitespace-pre pr-4 pl-2 text-fg" innerHTML={h()} />}
+                                <Show when={html()?.[n - 1]} fallback={<span class={codeClass()} style={codeStyle(text())}>{text()}</span>}>
+                                  {(h) => <span class={codeClass()} style={codeStyle(text())} innerHTML={h()} />}
                                 </Show>
                               </CodeRow>
                             )

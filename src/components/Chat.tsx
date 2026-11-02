@@ -271,6 +271,7 @@ export function Chat(props: {
                   composer?.insert(markdown)
                 }
           }
+          onOpen={(path) => ws() && openFile(ws()!, { kind: 'file', session: props.sessionId, path, mode: 'file' })}
           renderDiff={(only, lead) => reviewPage(false, { lead, only, whole: true })}
         />
       </div>

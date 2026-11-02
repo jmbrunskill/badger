@@ -120,6 +120,13 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
         return [200, { root: await query(url).runner.remote.workspaceRoot(cwd) }]
       },
     ],
+    // What the composer offers after `/` and `@`.
+    ['GET', '/api/commands', async ({ url }) => [200, await query(url).runner.remote.commands(absolutePath(url.searchParams.get('cwd')))]],
+    [
+      'GET',
+      '/api/files/find',
+      async ({ url }) => [200, await query(url).runner.remote.findFiles(absolutePath(url.searchParams.get('cwd')), url.searchParams.get('q') ?? '')],
+    ],
     [
       'GET',
       '/api/git',

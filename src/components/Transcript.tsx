@@ -130,6 +130,7 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
         return (
           <UserMessage
             text={item.text}
+            command={item.command}
             to={item.to}
             pastes={item.pastes}
             images={item.images}

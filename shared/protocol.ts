@@ -6,6 +6,23 @@
 export const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] as const
 export type PermissionMode = (typeof PERMISSION_MODES)[number]
 
+/** Where a slash command comes from: Claude Code itself, a skill or command file, a plugin, claude.ai, or an MCP server. */
+export type CommandSource = 'project' | 'user' | 'plugin' | 'synced' | 'mcp' | 'builtin'
+
+/** A slash command or skill a chat in some folder can run, as `/name`. */
+export interface CommandInfo {
+  name: string
+  description: string
+  argumentHint?: string
+  source: CommandSource
+  /** The plugin or MCP server it's from. */
+  origin?: string
+  /** The file that defines it, for user and project ones. */
+  path?: string
+  /** Another of the same name is the one `/name` runs. */
+  shadowed?: boolean
+}
+
 /** A model Claude Code offers, as its model picker lists it. */
 export interface ModelOption {
   /** What to pass to Claude Code: an alias like `opus`, a model id, or `default`. */

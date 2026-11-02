@@ -10,9 +10,10 @@ import { detail, toggleDetail } from '../prefs.ts'
 import type { Chat } from '../useChat.ts'
 import { Attachments } from './Attachments.tsx'
 import { FileBrowser } from './FileBrowser.tsx'
+import { PromptInput, type PromptInputControls } from './PromptInput.tsx'
 import { showError } from './Popover.tsx'
 import { ContextMeter } from './Usage.tsx'
-import { IconButton, Menu, Select, createDismiss, touch, type Option } from './ui.tsx'
+import { IconButton, Menu, Select, createDismiss, type Option } from './ui.tsx'
 
 export const MODES: Option<PermissionMode>[] = [
   { value: 'default', label: 'Ask before edits', description: 'Claude asks before changing files or running commands.' },
@@ -60,6 +61,8 @@ export function Composer(props: {
   ref?: (controls: ComposerControls) => void
   /** What the empty box says, if not that it messages Claude. */
   placeholder?: string
+  /** What's stacked above the composer, prompts and queued messages, which its completions cover while open. */
+  above?: () => HTMLElement | undefined
 }) {
   const state = props.chat.state
   const [text, setText] = createSignal(state.draft)
@@ -67,7 +70,8 @@ export function Composer(props: {
   const pastes = () => attached().pastes
   const images = () => attached().images
   const hasInput = () => !!text().trim() || pastes().length > 0 || images().length > 0
-  let input!: HTMLTextAreaElement
+  let root!: HTMLDivElement
+  let prompt: PromptInputControls | undefined
   let picker!: HTMLInputElement
 
   let saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -84,8 +88,22 @@ export function Composer(props: {
     clearTimeout(saveTimer)
     saveTimer = setTimeout(flush, 300)
   }
+  /** Replaces what's typed, as if typed: it's saved after the pause. */
+  const replace = (value: string, focus = false) => {
+    edit(value)
+    prompt?.setText(value, focus)
+  }
   // The draft as saved, here or by another tab; what's typed here and not yet saved stays.
-  createEffect(on(() => state.draft, (draft) => !unsaved && setText(draft)))
+  createEffect(
+    on(
+      () => state.draft,
+      (draft) => {
+        if (unsaved) return
+        setText(draft)
+        prompt?.setText(draft)
+      },
+    ),
+  )
   addEventListener('pagehide', flush)
   onCleanup(() => {
     flush()
@@ -93,10 +111,7 @@ export function Composer(props: {
   })
   const insert = (block: string) => {
     const before = text().trimEnd()
-    edit(`${before ? `${before}\n\n` : ''}${block}\n\n`)
-    input.focus()
-    input.setSelectionRange(input.value.length, input.value.length)
-    input.scrollTop = input.scrollHeight
+    replace(`${before ? `${before}\n\n` : ''}${block}\n\n`, true)
   }
   const quote = (quoted: string) =>
     insert(
@@ -107,7 +122,7 @@ export function Composer(props: {
         .map((line) => (line.trim() ? `> ${line}` : '>'))
         .join('\n'),
     )
-  props.ref?.({ focus: () => input.focus(), flush, quote, insert })
+  props.ref?.({ focus: () => prompt?.focus(), flush, quote, insert })
 
   const submit = () => {
     if (!hasInput()) return
@@ -115,6 +130,7 @@ export function Composer(props: {
     clearTimeout(saveTimer)
     unsaved = false
     setText('')
+    prompt?.setText('')
     props.chat.clearDraft()
   }
 
@@ -126,7 +142,7 @@ export function Composer(props: {
   }
   /**
    * Files picked on the server: images go in as images, so Claude sees them straight away; the rest
-   * go in the message as @-mentions, relative to the chat's folder, for Claude to read.
+   * go in the message as @-mention chips, relative to the chat's folder, for Claude to read.
    */
   const attachFiles = (paths: string[]) => {
     const isImage = (path: string) => Object.values(IMAGE_EXTENSIONS).flat().some((ext) => path.toLowerCase().endsWith(ext))
@@ -135,18 +151,10 @@ export function Composer(props: {
       api
         .fileBlob(path, props.machine)
         .then((blob) => addImages([new File([blob], name, { type: blob.type })]))
-        .catch((e: Error) => showError(`Couldn't attach ${name}`, e.message, input))
+        .catch((e: Error) => showError(`Couldn't attach ${name}`, e.message, root))
     }
     const dir = props.cwd && !isScratch(props.cwd) ? `${props.cwd}/` : undefined
-    const mentions = paths
-      .filter((path) => !isImage(path))
-      .map((path) => (dir && path.startsWith(dir) ? path.slice(dir.length) : path))
-      .map((path) => `@${/\s/.test(path) ? `"${path}"` : path}`)
-    if (!mentions.length) return
-    const at = input.selectionStart ?? text().length
-    const before = text().slice(0, at)
-    const after = text().slice(at)
-    edit(`${before}${before && !/\s$/.test(before) ? ' ' : ''}${mentions.join(' ')} ${after.replace(/^ /, '')}`)
+    prompt?.mention(paths.filter((path) => !isImage(path)).map((path) => (dir && path.startsWith(dir) ? path.slice(dir.length) : path)))
   }
 
   const [dragging, setDragging] = createSignal(false)
@@ -159,6 +167,7 @@ export function Composer(props: {
 
   return (
     <div
+      ref={root}
       inert={props.disabled}
       class={`@container relative border shadow-(--shadow-card) transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${props.disabled ? 'opacity-50' : ''}`}
       onDragOver={(e) => {
@@ -172,7 +181,7 @@ export function Composer(props: {
         if (!e.dataTransfer?.files.length) return
         e.preventDefault()
         addImages(e.dataTransfer.files)
-        input.focus()
+        prompt?.focus()
       }}
     >
       <Show when={more()}>
@@ -196,35 +205,33 @@ export function Composer(props: {
           class="px-3 pt-3"
         />
       </Show>
-      <textarea
-        ref={input}
-        value={text()}
-        onInput={(e) => edit(e.currentTarget.value)}
+      <PromptInput
+        ref={(c) => (prompt = c)}
+        initial={text()}
+        machine={props.machine}
+        cwd={props.cwd}
+        noFiles={!props.cwd || isScratch(props.cwd)}
+        above={props.above}
+        disabled={props.disabled}
+        placeholder={props.placeholder ?? (state.running ? 'Queue a message' : 'Message Claude')}
+        onInput={edit}
+        onSubmit={submit}
         onPaste={(e) => {
           // Images and big pastes become attachments, so the composer stays editable.
           // Office apps copy text with a picture of it too; the text is what's wanted then.
           const pasted = e.clipboardData?.getData('text/plain')
-          if (!pasted && e.clipboardData && addImages(e.clipboardData.files)) return e.preventDefault()
-          if (!pasted || !isLongPaste(pasted)) return
-          e.preventDefault()
+          if (!pasted) return !!e.clipboardData && addImages(e.clipboardData.files)
+          if (!isLongPaste(pasted)) return false
           props.chat.attach((a) => ({ ...a, pastes: [...a.pastes, pasted] }))
+          return true
         }}
         onKeyDown={(e) => {
-          // Phone keyboards have no Shift+Enter, so there Enter is a newline and the button sends.
-          if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !touch.matches) {
-            e.preventDefault()
-            submit()
-          }
-          if (e.key === 'Escape' && props.working) props.chat.interrupt()
+          if (e.key === 'Escape' && props.working) return (props.chat.interrupt(), true)
           // Each subagent and command has its own button; this sends every one at once.
-          if (e.key === 'b' && e.ctrlKey && !e.metaKey && props.canBackground()) {
-            e.preventDefault()
-            props.chat.background()
-          }
+          if (e.key === 'b' && e.ctrlKey && !e.metaKey && props.canBackground()) return (props.chat.background(), true)
+          return false
         }}
-        rows={Math.min(10, Math.max(2, text().split('\n').length))}
-        placeholder={props.placeholder ?? (state.running ? 'Queue a message' : 'Message Claude')}
-        class="block max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] w-full resize-none bg-transparent px-4 pt-3.5 text-message leading-relaxed outline-none pointer-coarse:text-base [field-sizing:content] placeholder:text-fg-3"
+        class="max-h-[calc(10lh+0.875rem)] min-h-[calc(2lh+0.875rem)] overflow-y-auto px-4 pt-3.5 text-message leading-relaxed pointer-coarse:text-base"
       />
       {/* A narrow composer keeps attaching and sending in the bar and puts the rest in a panel; wide ones show it all.
           Measured on the composer, not the screen, so the sidebar squeezing it counts too. */}
@@ -249,7 +256,7 @@ export function Composer(props: {
             start={props.cwd && !isScratch(props.cwd) ? props.cwd : undefined}
             onClose={() => {
               setBrowsing(false)
-              input.focus()
+              prompt?.focus()
             }}
             onUpload={() => picker.click()}
             onPickFiles={attachFiles}
@@ -264,7 +271,7 @@ export function Composer(props: {
           onChange={(e) => {
             addImages(e.currentTarget.files ?? [])
             e.currentTarget.value = ''
-            input.focus()
+            prompt?.focus()
           }}
         />
         <div class="hidden items-center gap-2 @md:flex">

@@ -636,6 +636,7 @@ export function Chat(props: {
               </Show>
               <Composer
                 ref={(c) => (composer = c)}
+                above={() => bottom}
                 chat={chat}
                 machine={machine()}
                 cwd={cwd()}

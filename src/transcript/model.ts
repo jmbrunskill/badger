@@ -18,7 +18,7 @@ export type ContentBlock = Block & { tool_use_id?: string; content?: unknown; is
 
 export type Item =
   /** `to`: the subagent it went to, for one the user sent a subagent through the chat. */
-  | { kind: 'user'; text: string; pastes?: string[]; images?: ShownImage[]; to?: string }
+  | { kind: 'user'; text: string; pastes?: string[]; images?: ShownImage[]; to?: string; command?: boolean }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id: string; name: string; input: Record<string, unknown> }
@@ -77,8 +77,8 @@ export function messageItems(m: WireMessage): Item[] {
     if (relayed) return [{ kind: 'user', text: relayed.text, to: relayed.description }]
     const output = commandOutput(raw)
     if (output !== undefined) return output ? [{ kind: 'output', text: output }] : []
-    const { text, pastes, images } = userText(m)
-    return text || pastes.length || images.length ? [{ kind: 'user', text, pastes, images }] : []
+    const { text, pastes, images, command } = userText(m)
+    return text || pastes.length || images.length ? [{ kind: 'user', text, pastes, images, command }] : []
   }
   if (m.type === 'assistant') {
     const content = ((m.message as { content?: Block[] })?.content ?? []) as Block[]
@@ -376,7 +376,7 @@ export function sentToSubagent(m: WireMessage): string | undefined {
 }
 
 /** What the user typed, and the big pastes and images sent with it as attachments. */
-export function userText(m: WireMessage): { text: string; pastes: string[]; images: ShownImage[] } {
+export function userText(m: WireMessage): { text: string; pastes: string[]; images: ShownImage[]; command?: boolean } {
   const content = (m.message as { content?: unknown })?.content
   const all = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? (content as ContentBlock[]) : []
   const blocks = all.filter((b) => b.type === 'text').map((b) => b.text ?? '')
@@ -396,7 +396,7 @@ export function userText(m: WireMessage): { text: string; pastes: string[]; imag
   const command = raw.match(/<command-name>(.*?)<\/command-name>/)
   if (command) {
     const args = raw.match(/<command-args>([\s\S]*?)<\/command-args>/)?.[1].trim()
-    return { text: args ? `${command[1]} ${args}` : command[1], pastes, images }
+    return { text: args ? `${command[1]} ${args}` : command[1], pastes, images, command: true }
   }
   // Harness-injected content (system reminders, command output) is wrapped in tags.
   if (raw.trimStart().startsWith('<')) return { text: '', pastes, images }

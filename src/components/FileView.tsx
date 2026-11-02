@@ -7,7 +7,8 @@ import { plural } from '../format.ts'
 import { highlight, languageOf } from '../highlight.ts'
 import { CodeRow } from './CodeRow.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
-import { DiffCount, GhostButton, PaneBar, PathLabel, Segmented } from './ui.tsx'
+import { Breadcrumbs } from './Breadcrumbs.tsx'
+import { DiffCount, GhostButton, PaneBar, Segmented } from './ui.tsx'
 
 /** Lines drawn per block; blocks off screen skip layout, so a long file costs little until it's scrolled through. */
 const BLOCK = 200
@@ -52,6 +53,8 @@ export function FileView(props: {
   onReady?: (focus: () => void) => void
   /** Adds lines picked out of it to the chat's message, as Markdown; absent when the chat can't take one. */
   onQuote?: (markdown: string) => void
+  /** Opens another file, picked from its path's folders. */
+  onOpen?: (path: string) => void
   /** The file's diff, `lead` first in its toolbar; `only` is its path in the checkout. */
   renderDiff: (only: string, lead: JSX.Element) => JSX.Element
 }) {
@@ -179,6 +182,10 @@ export function FileView(props: {
     />
   )
 
+  const crumbs = (after?: JSX.Element) => (
+    <Breadcrumbs path={props.path} root={diff()?.root} machine={props.machine} onOpen={props.onOpen} after={after} />
+  )
+
   return (
     <Show
       when={props.mode === 'file'}
@@ -189,7 +196,7 @@ export function FileView(props: {
               only(),
               <>
                 {toggle()}
-                <PathLabel path={only()} class="text-fg-3" />
+                {crumbs()}
               </>,
             )
           }
@@ -199,9 +206,7 @@ export function FileView(props: {
       <div class="flex min-h-0 flex-1 flex-col text-ui">
         <PaneBar class="whitespace-nowrap text-fg-3">
           {toggle()}
-          <PathLabel path={relative() ?? props.path} />
-          <Show when={changed().file}>{(f) => <DiffCount files={1} added={f().added} removed={f().removed} class="shrink-0" />}</Show>
-          <div class="flex-1" />
+          {crumbs(<Show when={changed().file}>{(f) => <DiffCount files={1} added={f().added} removed={f().removed} class="shrink-0" />}</Show>)}
           <GhostButton title="Read it again" onClick={reload} class="-mr-1.5">
             <RotateCw class={`size-3.5 ${content.loading ? 'animate-spin' : ''}`} />
           </GhostButton>

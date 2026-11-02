@@ -229,7 +229,8 @@ export function FileView(props: {
                             return (
                               <CodeRow
                                 data-line={n}
-                                numbers={[n]}
+                                number={n}
+                                digits={String(shown().length).length}
                                 lit={isLit(n)}
                                 // Changes only marked in the margin, so the file reads as the file: a green edge by a
                                 // line added, a small red notch where lines were taken out. Its Diff shows them.

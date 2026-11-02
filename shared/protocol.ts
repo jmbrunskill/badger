@@ -171,6 +171,19 @@ export interface BaseChoices {
   others: string[]
 }
 
+/** The branches a checkout could switch to, most recently committed first. */
+export interface BranchChoices {
+  /** Empty when HEAD is detached. */
+  branch: string
+  branches: {
+    /** As git names it: a local branch, or origin/fix for one only on the remote, which switching to makes a local branch of. */
+    name: string
+    remote?: boolean
+    /** The other checkout it's checked out in, where git won't check it out a second time. */
+    elsewhere?: string
+  }[]
+}
+
 /** Where a checkout stands, for the bar above a chat: what's uncommitted, and how it compares with its upstream and, in a worktree, the main checkout. */
 export interface GitStatus {
   /** Empty when HEAD is detached. */

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { accessSync, constants, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs'
 import { appendFile, mkdir, open, readFile, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
-import type { GitStatus, WorktreeStatus } from '../shared/protocol.ts'
+import type { BranchChoices, GitStatus, WorktreeStatus } from '../shared/protocol.ts'
 import { baseOf } from './base.ts'
 import { run } from './proc.ts'
 
@@ -103,8 +103,9 @@ async function newLines(file: string): Promise<number> {
   const handle = await open(file, 'r').catch(() => undefined)
   if (!handle) return 0
   try {
-    const { size } = await handle.stat()
-    if (size > 1_000_000) return 0
+    const stats = await handle.stat()
+    // An untracked repo inside this one is listed as its folder.
+    if (!stats.isFile() || stats.size > 1_000_000) return 0
     const buf = await handle.readFile()
     if (buf.subarray(0, 8000).includes(0)) return 0
     let n = 0
@@ -186,6 +187,50 @@ export async function gitPush(path: string): Promise<void> {
 /** Fast-forward to the upstream. Anything that would need a merge is refused, and left for Claude. */
 export async function gitPull(path: string): Promise<void> {
   await gitRemote(path, 'pull', '--ff-only')
+}
+
+/** Every branch, local and remote, less a remote one with a local branch of its name. */
+export async function branchChoices(path: string): Promise<BranchChoices> {
+  const [branch, top, refs] = await Promise.all([
+    git(path, 'branch', '--show-current'),
+    git(path, 'rev-parse', '--show-toplevel'),
+    git(path, 'for-each-ref', '--sort=-committerdate', '--format=%(refname)%00%(worktreepath)', 'refs/heads', 'refs/remotes'),
+  ])
+  const rows = refs
+    .split('\n')
+    .filter(Boolean)
+    .map((r) => r.split('\0'))
+  const local = new Set(rows.filter(([r]) => r.startsWith('refs/heads/')).map(([r]) => r.slice('refs/heads/'.length)))
+  const branches: BranchChoices['branches'] = []
+  for (const [ref, where] of rows) {
+    if (ref.startsWith('refs/heads/')) {
+      const name = ref.slice('refs/heads/'.length)
+      branches.push({ name, ...(where && resolve(where) !== resolve(top) && { elsewhere: where }) })
+    } else {
+      const name = ref.slice('refs/remotes/'.length)
+      // A remote's HEAD, and one already here under its own name.
+      if (ref.endsWith('/HEAD') || local.has(name.slice(name.indexOf('/') + 1))) continue
+      branches.push({ name, remote: true })
+    }
+  }
+  return { branch, branches }
+}
+
+/**
+ * Switch to a branch, or with `create` to a new one from here. One only on a remote becomes a local branch tracking it.
+ * Git refuses rather than lose uncommitted changes, and says so in its own words. Leaving a worktree's own branch,
+ * the one Claude Code made it with, deletes that if it has nothing the new one doesn't.
+ */
+export async function gitSwitch(path: string, to: string, create = false): Promise<void> {
+  const [from, top] = await Promise.all([git(path, 'branch', '--show-current'), git(path, 'rev-parse', '--show-toplevel')])
+  const has = (ref: string) => git(path, 'show-ref', '--verify', '--quiet', ref).then(() => true, () => false)
+  // gitRemote for git's own words when it refuses; nothing here touches the network.
+  if (create) await gitRemote(path, 'switch', '--create', to)
+  else if (await has(`refs/heads/${to}`)) await gitRemote(path, 'switch', to)
+  else if (await has(`refs/remotes/${to}`)) await gitRemote(path, 'switch', '--track', to)
+  else throw new Error(`There's no branch called ${to}`)
+  const own = WORKTREE_PATH.exec(resolve(top))?.[2]
+  if (own && from === `worktree-${own}`) await git(path, 'branch', '-d', from).catch(() => {})
 }
 
 /**

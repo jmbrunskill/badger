@@ -36,7 +36,7 @@ import { TERMINAL_INSTRUCTIONS, TERMINAL_SERVER, terminalOps } from './terminalT
 import { Terminals } from './terminals.ts'
 import { ContextReader, readAccount } from './usage.ts'
 import { baseChoices, setBase } from './base.ts'
-import { excludeWorktrees,gitPull, gitPush, gitStatus, inaccessible, removeWorktree, rootOf, worktreeStatus } from './workspace.ts'
+import { branchChoices, excludeWorktrees, gitPull, gitPush, gitStatus, gitSwitch, inaccessible, removeWorktree, rootOf, worktreeStatus } from './workspace.ts'
 
 // Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
 const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
@@ -317,6 +317,15 @@ export class Runner implements RunnerApi {
   /** Fine while a chat is working: a fast-forward won't touch files with uncommitted changes, and Claude rereads a file that changed under it. */
   async gitPull(path: string) {
     await gitPull(path).catch(badRequest)
+  }
+
+  branchChoices(path: string) {
+    return branchChoices(path).catch(badRequest)
+  }
+
+  /** Fine while a chat is working, as pulling is: git won't switch over uncommitted changes it would lose. */
+  async gitSwitch(path: string, to: string, create: boolean) {
+    await gitSwitch(path, to, create).catch(badRequest)
   }
 
   async removeWorktree(dir: string): Promise<void> {

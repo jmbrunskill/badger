@@ -2,6 +2,7 @@ import { z, type ZodType } from 'zod'
 import type {
   AccountUsage,
   BaseChoices,
+  BranchChoices,
   Card,
   ChatCommand,
   ChatCommandReply,
@@ -176,6 +177,9 @@ export interface RunnerApi {
   reviewDiff(path: string, scope: ReviewScope, context: number, only?: string): Promise<ReviewDiff>
   /** Fast-forward only; refused while a chat is working there. */
   gitPull(path: string): Promise<void>
+  branchChoices(path: string): Promise<BranchChoices>
+  /** `create` makes `to` a new branch from here. */
+  gitSwitch(path: string, to: string, create: boolean): Promise<void>
   /** Refused while a chat is working in it or it has terminals. */
   removeWorktree(path: string): Promise<void>
   /** The folders new chats can start in: these, from where its chats ran and what was added by hand, less the hidden ones. */
@@ -211,6 +215,8 @@ export const RUNNER_METHODS = [
   'setBase',
   'reviewDiff',
   'gitPull',
+  'branchChoices',
+  'gitSwitch',
   'removeWorktree',
   'listFolders',
   'folderSize',

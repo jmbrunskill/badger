@@ -1,4 +1,4 @@
-import type { ReviewHunk } from '../shared/protocol.ts'
+import type { ReviewFile, ReviewHunk } from '../shared/protocol.ts'
 
 /**
  * A diff's hunks as rows: their @@ lines, and each line with its number before and after and what in it changed.
@@ -18,6 +18,18 @@ export function rowsFor(hunk: ReviewHunk): Row[] {
   let rows = rowCache.get(hunk)
   if (!rows) rowCache.set(hunk, (rows = rowsOf(hunk.patch)))
   return rows
+}
+
+/** The most digits any of a file's diff lines is numbered with, so all its hunks give their numbers the same room. */
+const digitsCache = new WeakMap<ReviewFile, number>()
+export function digitsOf(file: ReviewFile): number {
+  let digits = digitsCache.get(file)
+  if (digits === undefined) {
+    let most = 0
+    for (const h of file.hunks) for (const r of rowsFor(h)) if (r.kind !== 'hunk') most = Math.max(most, r.old ?? 0, r.new ?? 0)
+    digitsCache.set(file, (digits = String(most).length))
+  }
+  return digits
 }
 
 function rowsOf(patch: string): Row[] {

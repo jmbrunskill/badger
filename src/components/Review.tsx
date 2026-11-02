@@ -3,7 +3,7 @@ import { createStore } from 'solid-js/store'
 import { Check, ChevronDown, ChevronRight, FileText, MessageSquarePlus, RotateCw, Trash2 } from '../icons'
 import type { ReviewAttention, ReviewDiff, ReviewFile, ReviewGroup, ReviewGuide, ReviewHunk, WireMessage } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
-import { SIGN, anchorOf, rowsFor, startOf, type Line, type Row } from '../diffRows.ts'
+import { SIGN, anchorOf, digitsOf, rowsFor, startOf, type Line, type Row } from '../diffRows.ts'
 import { plural } from '../format.ts'
 import { highlight, languageOf } from '../highlight.ts'
 import { recall, remember, settle } from '../scrollMemory.ts'
@@ -1397,7 +1397,7 @@ function HunkView(props: {
 
   /** Only for the rows it was made from: while new rows are highlighted, the last ones' lines would be out of step. */
   /**
-   * Pressing on a line's numbers selects the line, and dragging up or down selects the lines between, scrolling the page near
+   * Pressing on a line's number selects the line, and dragging up or down selects the lines between, scrolling the page near
    * its edges: an ordinary selection of whole lines, so it's commented on as any other is. Shift extends the selection to it.
    */
   const selectRows = (anchor: number, at: number) => {
@@ -1530,7 +1530,8 @@ function HunkView(props: {
                       <CodeRow
                         data-row={i()}
                         kind={r.kind}
-                        numbers={[r.old, r.new]}
+                        number={r.kind === 'del' ? r.old : r.new}
+                        digits={digitsOf(f())}
                         sign
                         gutter={{
                           onPointerDown: (e) => selectFrom(e, i()),

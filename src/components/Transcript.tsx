@@ -174,7 +174,8 @@ export function Messages(props: TranscriptProps & { nested?: boolean; folded?: b
         // Stopped by the user, or on an error already shown above, isn't news; any other way of stopping is.
         const quiet = () => item.ok || view().interrupted.has(item) || view().shownError.has(item)
         return (
-          <div class={`mt-4 text-xs tabular-nums ${quiet() ? 'text-fg-3' : 'text-danger'}`}>
+          // Its own gap below, as a prompt would bring, for when the next turn starts without one.
+          <div class={`mt-4 mb-8 last:mb-0 text-xs tabular-nums ${quiet() ? 'text-fg-3' : 'text-danger'}`}>
             {view().interrupted.has(item) ? 'Interrupted · ' : quiet() ? '' : `Stopped: ${stopReason(item.error)} · `}
             {duration(item.seconds)}
             {item.tokens ? ` · ${compact(item.tokens.input)} in · ${compact(item.tokens.output)} out` : ''}

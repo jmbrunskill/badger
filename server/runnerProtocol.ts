@@ -7,6 +7,7 @@ import type {
   ChatCommand,
   ChatCommandReply,
   ChatStatus,
+  CommandInfo,
   GitStatus,
   ReviewDiff,
   ReviewScope,
@@ -168,6 +169,10 @@ export interface RunnerApi {
   /** Which of these folders Claude Code can't run in. */
   inaccessible(dirs: string[]): string[]
   workspaceRoot(cwd: string): string
+  /** The slash commands and skills a chat in `cwd` can run, with where each is from. */
+  commands(cwd: string): Promise<CommandInfo[]>
+  /** Files and folders under `cwd` matching what's typed after `@`, relative to it, best first. */
+  findFiles(cwd: string, typed: string): Promise<string[]>
   worktreeStatus(path: string): Promise<WorktreeStatus>
   /** Undefined outside a git repo. Fetches first if asked, at most once a minute. */
   gitStatus(path: string, fetch: boolean): Promise<GitStatus | undefined>
@@ -210,6 +215,8 @@ export const RUNNER_METHODS = [
   'importTranscript',
   'inaccessible',
   'workspaceRoot',
+  'commands',
+  'findFiles',
   'worktreeStatus',
   'gitStatus',
   'gitPush',

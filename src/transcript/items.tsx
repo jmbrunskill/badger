@@ -9,6 +9,7 @@ import { Link } from '../router.tsx'
 import { STATUS_LABELS } from '../stores/cards.ts'
 import { Attachments, type ContextChip } from '../components/Attachments.tsx'
 import { Markdown } from '../components/Markdown.tsx'
+import { PromptText } from '../components/PromptChip.tsx'
 import { Disclosure, splitSkill } from '../components/ToolCard.tsx'
 import { LiveDot, compact, plural } from '../components/ui.tsx'
 import { duration, type Chip, type Item } from './model.ts'
@@ -226,6 +227,8 @@ export function CardContextBadge(props: { context: CardContext }) {
  */
 export function UserMessage(props: {
   text: string
+  /** It was a slash command Claude Code ran, so its first word shows as one. */
+  command?: boolean
   pastes?: string[]
   images?: ShownImage[]
   card?: CardContext
@@ -280,7 +283,7 @@ export function UserMessage(props: {
               'mask-image': clamped() ? 'linear-gradient(to bottom, black 70%, transparent)' : undefined,
             }}
           >
-            {props.text}
+            <PromptText text={props.text} command={props.command} />
           </div>
           <Show when={overflows()}>
             <button class="mt-1 text-xs text-fg-3 hover:text-fg-2" onClick={() => setExpanded(!expanded())}>

@@ -5,6 +5,7 @@ import type {
   Card,
   CardStatus,
   ClientEvent,
+  CommandInfo,
   GitStatus,
   Folder,
   ImageAttachment,
@@ -92,6 +93,8 @@ export const api = {
     return res.blob()
   },
   workspace: (cwd: string, machine?: string) => get<{ root: string }>(`/api/workspace?${on(machine, { cwd })}`),
+  commands: (cwd: string, machine?: string) => get<CommandInfo[]>(`/api/commands?${on(machine, { cwd })}`),
+  findFiles: (cwd: string, q: string, machine?: string) => get<string[]>(`/api/files/find?${on(machine, { cwd, q })}`),
   createTerminal: (spec: { cwd: string; machine?: string; command?: string; cols?: number; rows?: number }) =>
     request<TerminalInfo>('POST', '/api/terminals', spec),
   restartTerminal: (id: string) => request<TerminalInfo>('POST', `/api/terminals/${id}/restart`),

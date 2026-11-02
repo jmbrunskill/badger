@@ -6,6 +6,7 @@ import { IMAGE_EXTENSIONS, IMAGE_TYPES, type ChatCommand, type ChatCommandReply,
 import { BOARD_INSTRUCTIONS, BOARD_SERVER, boardOps } from './boardTools.ts'
 import { Children } from './children.ts'
 import { listModels } from './claudeProbe.ts'
+import { findFiles, listCommands } from './completions.ts'
 import { BadRequest, absolutePath, badRequest } from './errors.ts'
 import { folderSize, forgetSize, listDir, listFolders } from './folders.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
@@ -289,6 +290,14 @@ export class Runner implements RunnerApi {
 
   workspaceRoot(cwd: string): string {
     return rootOf(cwd)
+  }
+
+  commands(cwd: string) {
+    return listCommands(absolutePath(cwd)).catch(badRequest)
+  }
+
+  findFiles(cwd: string, typed: string) {
+    return findFiles(absolutePath(cwd), typed).catch(badRequest)
   }
 
   worktreeStatus(path: string) {

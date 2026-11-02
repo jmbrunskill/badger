@@ -149,6 +149,25 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
     ],
     [
       'GET',
+      '/api/git/branches',
+      async ({ url }) => {
+        const dir = absolutePath(url.searchParams.get('path'))
+        return [200, await query(url).runner.remote.branchChoices(dir)]
+      },
+    ],
+    [
+      'POST',
+      '/api/git/switch',
+      async ({ json }) => {
+        const body = await json()
+        const runner = machines.fromRequest(body.machine)
+        if (typeof body.to !== 'string' || !body.to) throw new BadRequest('to must be a branch')
+        await runner.remote.gitSwitch(absolutePath(body.path), body.to, body.create === true)
+        return [204, null]
+      },
+    ],
+    [
+      'GET',
       '/api/review',
       async ({ url }) => {
         const dir = absolutePath(url.searchParams.get('path'))

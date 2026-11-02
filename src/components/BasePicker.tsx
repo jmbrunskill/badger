@@ -7,6 +7,8 @@ import { SearchMenu, type SearchItem } from './ui.tsx'
 const [changes, setChanges] = createSignal(0)
 /** Goes up whenever a base is picked anywhere, so whatever shows one reads it again. */
 export const baseChanged = changes
+/** For what changes the base other than picking one, like switching branch. */
+export const touchBase = () => setChanges((n) => n + 1)
 
 export const howText: Record<BaseHow, string> = {
   set: 'picked by hand',

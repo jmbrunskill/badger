@@ -7,6 +7,7 @@ import { basename, worktreeOf } from '../folders.ts'
 import { ago } from '../format.ts'
 import type { Ws } from '../terminals.ts'
 import { BasePicker, baseChanged, howText } from './BasePicker.tsx'
+import { BranchPicker } from './BranchPicker.tsx'
 import { FileChat } from './FileChat.tsx'
 import { RenameChat } from './RenameChat.tsx'
 import { TerminalButton } from './Terminals.tsx'
@@ -98,6 +99,7 @@ export function ChatHeader(props: {
 
   let gitMenu!: HTMLDivElement
   let showBases: (() => void) | undefined
+  let showBranches: (() => void) | undefined
   /** Pushes or pulls, saying what git said by the button or the git menu if it fails. */
   const transfer = async (kind: 'push' | 'pull', from: Element = gitMenu) => {
     const dir = props.cwd
@@ -180,6 +182,13 @@ export function ChatHeader(props: {
         run: () => ask('Commit the changes here.'),
       })
     }
+    if (props.cwd) {
+      items.push({
+        label: 'Switch branch',
+        description: g.branch ? `Off ${g.branch}, to another or a new one.` : 'Off this detached commit, to a branch or a new one.',
+        run: () => showBranches?.(),
+      })
+    }
     // Detached, there's nowhere to keep one.
     if (g.branch && props.cwd) {
       items.push({
@@ -253,9 +262,14 @@ export function ChatHeader(props: {
                 trigger={() => <GitSummary git={g()} branch hide={primary() === 'push' ? 'ahead' : primary() === 'pull' ? 'behind' : undefined} />}
               />
             </div>
-            {/* Opened from the git menu's Base item, where the menu was, and back to its button when closed. */}
+            {/* Opened from the git menu's Base and Switch branch items, where the menu was, and back to its button when closed. */}
             <Show when={props.cwd}>
-              {(dir) => <BasePicker dir={dir()} machine={props.machine} anchor={() => gitMenu.querySelector('button') ?? gitMenu} opener={(show) => (showBases = show)} />}
+              {(dir) => (
+                <>
+                  <BasePicker dir={dir()} machine={props.machine} anchor={() => gitMenu.querySelector('button') ?? gitMenu} opener={(show) => (showBases = show)} />
+                  <BranchPicker dir={dir()} machine={props.machine} anchor={() => gitMenu.querySelector('button') ?? gitMenu} opener={(show) => (showBranches = show)} />
+                </>
+              )}
             </Show>
             <Show when={primary()}>
               {(kind) => (

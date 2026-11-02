@@ -1,6 +1,7 @@
 import { createSignal } from 'solid-js'
 import type {
   BaseChoices,
+  BranchChoices,
   Card,
   CardStatus,
   ClientEvent,
@@ -72,6 +73,9 @@ export const api = {
   baseChoices: (path: string, machine?: string) => get<BaseChoices>(`/api/git/base?${on(machine, { path })}`),
   /** A branch, '' for none, or null to work it out again. */
   setBase: (path: string, base: string | null, machine?: string) => request<void>('PUT', '/api/git/base', { path, base, machine }),
+  branches: (path: string, machine?: string) => get<BranchChoices>(`/api/git/branches?${on(machine, { path })}`),
+  /** `create` makes `to` a new branch from here. */
+  switchBranch: (path: string, to: string, create: boolean, machine?: string) => request<void>('POST', '/api/git/switch', { path, to, create, machine }),
   removeWorktree: (path: string, machine?: string) => request<void>('DELETE', `/api/worktree?${on(machine, { path })}`),
   folders: (machine?: string) => get<Folder[]>(`/api/folders?${on(machine)}`),
   addFolder: (path: string, machine?: string) => request<void>('POST', '/api/folders', { path, machine }),

@@ -12,6 +12,9 @@ import { ltr, plural } from './ui.tsx'
 /** How many folders show before "Show more": the most recently used. */
 const FOLDERS_SHOWN = 4
 
+/** Each runner's folders as last listed, shown straight away the next time while they're listed again. */
+const lastListed = new Map<string, Folder[]>()
+
 /**
  * Where a new chat starts, as a card per folder. A repo's card is its main checkout, with its
  * worktrees under it showing what's uncommitted, unpushed and unmerged, and a row to start in a
@@ -34,11 +37,20 @@ export function FolderPicker(props: {
     () => props.machine,
     (machine) =>
       api.folders(machine).then(
-        (list) => ({ machine, list, error: undefined }),
+        (list) => {
+          lastListed.set(machine, list)
+          return { machine, list, error: undefined }
+        },
         (e: Error) => ({ machine, list: [] as Folder[], error: e.message }),
       ),
   )
-  const current = () => (folders.latest?.machine === props.machine ? folders.latest : undefined)
+  const current = () => {
+    if (folders.latest?.machine === props.machine) return folders.latest
+    const list = lastListed.get(props.machine)
+    return list && { machine: props.machine, list, error: undefined }
+  }
+  /** What's shown is the last list, from before this picker opened, while it's listed again: its git status may be out of date for a moment. */
+  const updating = () => folders.latest?.machine !== props.machine && lastListed.has(props.machine)
   const listed = () => current()?.list ?? []
   const listError = () => current()?.error
   const [all, setAll] = createSignal(false)
@@ -162,6 +174,11 @@ export function FolderPicker(props: {
         </For>
         <span class="sr-only">Loading folders…</span>
       </Show>
+      <Show when={updating()}>
+        <span class="sr-only" role="status">
+          Updating folders…
+        </span>
+      </Show>
 
       <For each={shown()}>
         {(folder) => (
@@ -188,7 +205,13 @@ export function FolderPicker(props: {
                             {/* The status drops under the name when the row's too narrow for both. */}
                             <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3">
                               <FolderName folder={folder} onHide={(button) => hide(folder, button)} />
-                              <GitSummaryButton git={c.git} path={c.path} branch class="shrink-0 text-meta" />
+                              <span class="flex shrink-0 items-center gap-2">
+                                {/* What's shown is the last list, while its git status is read again. */}
+                                <Show when={updating()}>
+                                  <Loader2 class="size-3 animate-spin text-fg-3" aria-hidden="true" data-updating />
+                                </Show>
+                                <GitSummaryButton git={c.git} path={c.path} branch class={`text-meta ${updating() ? 'animate-pulse' : ''}`} />
+                              </span>
                             </div>
                             <Size path={c.path} machine={props.machine} />
                           </Row>
@@ -209,7 +232,7 @@ export function FolderPicker(props: {
                               </Show>
                             </span>
                             <Show when={!isDeleting(c.path)} fallback={<span class="shrink-0 text-meta text-fg-3">Deleting…</span>}>
-                              <GitSummaryButton git={c.git} path={c.path} class="shrink-0 text-meta" />
+                              <GitSummaryButton git={c.git} path={c.path} class={`shrink-0 text-meta ${updating() ? 'animate-pulse' : ''}`} />
                             </Show>
                           </div>
                           <Size path={c.path} machine={props.machine} />

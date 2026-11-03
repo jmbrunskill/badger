@@ -97,6 +97,8 @@ wideQuery.addEventListener('change', (e) => setWide(e.matches))
 export { wide }
 
 const mac = /Mac|iPhone|iPad/.test(navigator.userAgent)
+/** The key held to open a link where a plain click edits: Cmd on a Mac, Ctrl elsewhere. */
+export const MOD = mac ? '⌘' : 'Ctrl'
 /** The chord every layout shortcut starts with: Cmd+K on a Mac, Ctrl+K elsewhere. */
 export const LEADER = mac ? '⌘K' : 'Ctrl+K'
 export const isLeader = (e: KeyboardEvent) =>

@@ -1,14 +1,18 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from 'solid-js'
 import { render } from 'solid-js/web'
-import { Editor, Node, type JSONContent } from '@tiptap/core'
+import { Editor, Extension, Node, type JSONContent } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import { Placeholder } from '@tiptap/extensions'
 import type { Node as PMNode } from '@tiptap/pm/model'
+import { Plugin, PluginKey } from '@tiptap/pm/state'
+import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { CommandInfo, CommandSource } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { fileLink, useOpenFile } from '../fileLinks.ts'
 import { File, Folder, SquareSlash } from '../icons'
-import { COMMAND, chipText, segments, type Chip } from '../prompt.ts'
+import { COMMAND, chipText, segments, spans, type Chip } from '../prompt.ts'
+import { MOD } from '../layout.ts'
+import { tokens, type Tokens } from '../highlight.ts'
 import { PromptChip } from './PromptChip.tsx'
 import { touch } from './ui.tsx'
 
@@ -45,6 +49,128 @@ const ChipNode = Node.create({
       return { dom, destroy: dispose, ignoreMutation: () => true }
     },
 })
+
+/** A fenced block in a language: its code, and the position each of its lines starts at. */
+type Fence = { lang: string; code: string; lines: number[] }
+/** What's found in a document, and the colours of its code, which come after, once they're worked out. */
+type SpansState = { doc: PMNode; spans: Decoration[]; fences: Fence[]; colours: DecorationSet; all: DecorationSet }
+const spansKey = new PluginKey<SpansState>('spans')
+
+const withColours = (found: Omit<SpansState, 'colours' | 'all'>, colours: DecorationSet): SpansState => ({
+  ...found,
+  colours,
+  all: DecorationSet.create(found.doc, [...found.spans, ...colours.find()]),
+})
+
+/**
+ * Links and code shown as such, found in the text as it changes; the text itself stays plain. Code in a fenced block
+ * that says its language is highlighted too, once Shiki's done it.
+ */
+const Spans = Extension.create({
+  name: 'spans',
+  addProseMirrorPlugins: () => [
+    new Plugin<SpansState>({
+      key: spansKey,
+      state: {
+        init: (_, { doc }) => withColours(findSpans(doc), DecorationSet.empty),
+        apply: (tr, state) => {
+          const colours = tr.getMeta(spansKey) as DecorationSet | undefined
+          if (colours) return withColours(state, colours)
+          if (!tr.docChanged) return state
+          // Until the code's highlighted again, its colours move with the text, so they don't flash off as it's typed.
+          return withColours(findSpans(tr.doc), state.colours.map(tr.mapping, tr.doc))
+        },
+      },
+      props: {
+        decorations: (state) => spansKey.getState(state)!.all,
+      },
+      view: (view) => {
+        let asked: PMNode | undefined
+        /** One at a time, a block at a time: a long block isn't highlighted again for every key typed while it's done. */
+        let busy = false
+        const colour = async () => {
+          const { doc, fences, colours } = spansKey.getState(view.state)!
+          if (busy || asked === doc || (!fences.length && colours === DecorationSet.empty)) return
+          asked = doc
+          busy = true
+          const found: (Tokens | undefined)[] = []
+          for (const f of fences) {
+            if (view.isDestroyed || view.state.doc !== doc) break
+            found.push(await tokens(f.code, f.lang))
+          }
+          busy = false
+          if (view.isDestroyed) return
+          // Typed on since: on to what's there now.
+          if (view.state.doc !== doc) return colour()
+          // Not mid-composition (IME), which redrawing the text would break; it's done after, as that changes the text.
+          if (view.composing) return void (asked = undefined)
+          const decorations = fences.flatMap((f, i) =>
+            (found[i] ?? []).flatMap((line, l) => {
+              let pos = f.lines[l]
+              return line.flatMap((t) => {
+                const from = pos
+                pos += t.length
+                return t.style && from < pos ? [Decoration.inline(from, pos, { style: t.style })] : []
+              })
+            }),
+          )
+          view.dispatch(view.state.tr.setMeta(spansKey, DecorationSet.create(doc, decorations)))
+        }
+        void colour()
+        return { update: () => void colour() }
+      },
+    }),
+  ],
+})
+
+function findSpans(doc: PMNode): Omit<SpansState, 'colours' | 'all'> {
+  // A paragraph a line, and a chip one character, as it's one position.
+  const lines: { pos: number; size: number; from: number; to: number }[] = []
+  let text = ''
+  doc.forEach((p, pos) => {
+    if (lines.length) text += '\n'
+    const line = p.textBetween(0, p.content.size, undefined, '￼')
+    lines.push({ pos, size: p.nodeSize, from: text.length, to: text.length + line.length })
+    text += line
+  })
+  /** The line an offset's on; offsets are asked in order, so it only moves on. */
+  let i = 0
+  const lineAt = (offset: number) => {
+    while (offset > lines[i].to) i++
+    return lines[i]
+  }
+  const pos = (offset: number) => {
+    const line = lineAt(offset)
+    return line.pos + 1 + offset - line.from
+  }
+  const decorations: Decoration[] = []
+  const fences: Fence[] = []
+  for (const span of spans(text)) {
+    if (span.kind === 'fence') {
+      const fence: Fence | undefined = span.lang ? { lang: span.lang, code: text.slice(span.code.from, span.code.to), lines: [] } : undefined
+      for (let line = lineAt(span.from); ; line = lines[++i]) {
+        const start = line.from === span.from
+        const end = line.to === span.to
+        // The fences themselves are faint beside the code.
+        const edge = `${start ? ' prompt-fence-start' : ''}${end ? ' prompt-fence-end' : ''}${start || (end && span.closed) ? ' prompt-fence-mark' : ''}`
+        decorations.push(Decoration.node(line.pos, line.pos + line.size, { class: `prompt-fence${edge}`, spellcheck: 'false' }))
+        if (line.from >= span.code.from && line.to <= span.code.to) fence?.lines.push(line.pos + 1)
+        if (line.to >= span.to) break
+      }
+      if (fence?.lines.length) fences.push(fence)
+    } else if (span.kind === 'code') decorations.push(Decoration.inline(pos(span.from), pos(span.to), { class: 'prompt-code', spellcheck: 'false' }))
+    else
+      decorations.push(
+        Decoration.inline(pos(span.from), pos(span.to), {
+          class: 'prompt-url',
+          spellcheck: 'false',
+          'data-url': text.slice(span.from, span.to),
+          title: `${MOD}-click to open`,
+        }),
+      )
+  }
+  return { doc, spans: decorations, fences }
+}
 
 /** The prompt as text: a line per paragraph, chips as they're written. */
 function docText(doc: PMNode): string {
@@ -331,6 +457,7 @@ export function PromptInput(props: {
           underline: false,
         }),
         ChipNode,
+        Spans,
         Placeholder.configure({ placeholder: () => props.placeholder }),
       ],
       coreExtensionOptions: {
@@ -369,6 +496,12 @@ export function PromptInput(props: {
         },
         // Dropped files are the composer's to attach.
         handleDrop: (_, e) => !!(e as DragEvent).dataTransfer?.files.length,
+        // A link opens with a modifier, since a plain click is for putting the cursor in it.
+        handleClick: (_, __, e) => {
+          const url = (e.metaKey || e.ctrlKey) && (e.target as Element).closest<HTMLElement>('[data-url]')?.dataset.url
+          if (url) window.open(url, '_blank', 'noreferrer')
+          return !!url
+        },
         handleClickOn: (_, __, node) => {
           if (node.type.name !== 'chip' || node.attrs.kind !== 'file' || !files) return false
           const link = fileLink(node.attrs.value, files.cwd())

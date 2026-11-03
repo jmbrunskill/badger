@@ -518,3 +518,14 @@
 .tiptap .selectedCell::after { content: ''; position: absolute; inset: 0; background: var(--color-surface); opacity: 0.6; pointer-events: none; }
 .tiptap a { cursor: text; }
 .tiptap hr.ProseMirror-selectednode { border-color: var(--color-fg-3); }
+
+/* A prompt's links and code, in the composer and as sent: shown as such, with the text as typed, backticks and all. */
+.prompt-url { text-decoration: underline; text-decoration-color: var(--color-fg-3); text-underline-offset: 3px; overflow-wrap: anywhere; }
+a.prompt-url:hover { text-decoration-color: currentColor; }
+.prompt-code { padding: 0.1em 0.2em; border-radius: var(--radius-sm); background: var(--color-well); font-family: var(--font-mono); font-size: 0.86em; box-decoration-break: clone; }
+/* A fenced block, a line a paragraph in the composer, drawn as one box. */
+.prompt-fence { background: var(--color-well); padding: 0 0.75em; font-family: var(--font-mono); font-size: 0.86em; }
+.prompt-fence-start, code.prompt-fence { padding-top: 0.4em; border-top-left-radius: var(--radius-lg); border-top-right-radius: var(--radius-lg); }
+.prompt-fence-end, code.prompt-fence { padding-bottom: 0.4em; border-bottom-left-radius: var(--radius-lg); border-bottom-right-radius: var(--radius-lg); }
+code.prompt-fence { margin: 0.3em 0; overflow-x: auto; }
+.prompt-fence-mark { color: var(--color-fg-3); }

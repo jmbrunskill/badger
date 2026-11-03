@@ -5,8 +5,8 @@ import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
 import { diffView, openFile, openTerminal, openView, planView, setFileMode, viewKey, viewShown, wide } from '../layout.ts'
-import { OpenFile, useOpenFile } from '../fileLinks.ts'
-import { FileView } from './FileView.tsx'
+import { OpenFile, expandHome, useOpenFile } from '../fileLinks.ts'
+import { FileView, openingMode } from './FileView.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
 import { sideChatsOf, startSideChat } from '../btw.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
@@ -165,8 +165,9 @@ export function Chat(props: {
         cwd: () => cwd(),
         open: (path: string, line?: number) => {
           const w = beside()
+          if (!w) return
           // Opening it is asking for the file, so a tab showing its diff switches back.
-          if (w) openFile(w, { kind: 'file', session: props.sessionId, path, line, mode: 'file' })
+          void expandHome(path, machine()).then((path) => openFile(w, { kind: 'file', session: props.sessionId, path, line, mode: openingMode(path, line) }))
         },
       }
 
@@ -271,7 +272,7 @@ export function Chat(props: {
                   composer?.insert(markdown)
                 }
           }
-          onOpen={(path) => ws() && openFile(ws()!, { kind: 'file', session: props.sessionId, path, mode: 'file' })}
+          onOpen={(path) => ws() && openFile(ws()!, { kind: 'file', session: props.sessionId, path, mode: openingMode(path) })}
           renderDiff={(only, lead) => reviewPage(false, { lead, only, whole: true })}
         />
       </div>

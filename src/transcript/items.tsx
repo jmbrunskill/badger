@@ -9,6 +9,7 @@ import { Link } from '../router.tsx'
 import { STATUS_LABELS } from '../stores/cards.ts'
 import { Attachments, type ContextChip } from '../components/Attachments.tsx'
 import { Markdown } from '../components/Markdown.tsx'
+import { PathLink } from '../components/PathLink.tsx'
 import { PromptText } from '../components/PromptChip.tsx'
 import { Disclosure, splitSkill } from '../components/ToolCard.tsx'
 import { LiveDot, compact, plural } from '../components/ui.tsx'
@@ -141,7 +142,7 @@ export function contextChip(chip: Chip): ContextChip {
         body: () => (
           <>
             <Show when={dir}>
-              <div class="mb-1.5 font-mono text-xs text-fg-3">{dir}</div>
+              <PathLink path={`${dir}/SKILL.md`} title="Open the skill’s file as it is now" class="mb-1.5" />
             </Show>
             <Markdown text={body} />
           </>
@@ -158,7 +159,7 @@ export function contextChip(chip: Chip): ContextChip {
           <For each={chip.files}>
             {(f) => (
               <div class="mb-3 last:mb-0">
-                <div class="mb-1 font-mono text-xs text-fg-3">{f.path}</div>
+                <PathLink path={f.path} class="mb-1" />
                 <Markdown text={f.content} />
               </div>
             )}

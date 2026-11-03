@@ -296,10 +296,12 @@ export class Chats {
     asked.set(sessionId, n)
     const { text: draft, attachments: draftAttachments } = meta.draft(sessionId)
     const children = meta.children(sessionId)
+    const started = meta.startedBy(sessionId)
+    const parent = started && { id: started.parentId, toolUseId: started.toolUseId, title: childTitle(started.kind) }
     const machine = placement.machineOf(sessionId)
     const [history, info] = machine ? await Promise.all([transcripts.transcript(sessionId), transcripts.info(sessionId)]) : [[], undefined]
     const runner = machine ? machines.get(machine) : undefined
-    const base = { type: 'snapshot' as const, sessionId, machine, draft, draftAttachments, children }
+    const base = { type: 'snapshot' as const, sessionId, machine, draft, draftAttachments, children, ...(parent ? { parent } : {}) }
     const done = (live: LiveSnapshot | null, gone: boolean) => {
       if (asked.get(sessionId) !== n) return
       if (!live) {

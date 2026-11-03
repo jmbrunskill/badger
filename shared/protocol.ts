@@ -184,6 +184,8 @@ export interface BaseChoices {
   current?: { branch: string; how: BaseHow }
   /** What was picked by hand: a branch, or '' for none. Undefined when it's worked out. */
   set?: string
+  /** Where the branch pushes to, e.g. origin/spike, with the commits not pushed yet: for seeing just those. */
+  upstream?: { branch: string; ahead: number }
   /** The likely bases, nearest first, with the commits HEAD has that each doesn't. */
   likely: { branch: string; ahead: number }[]
   /** Every other branch, local and remote, most recent first. */

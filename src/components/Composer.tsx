@@ -169,7 +169,7 @@ export function Composer(props: {
     <div
       ref={root}
       inert={props.disabled}
-      class={`@container relative border shadow-(--shadow-card) transition-colors rounded-2xl focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${props.disabled ? 'opacity-50' : ''}`}
+      class={`@container relative border shadow-(--shadow-card) transition-colors rounded-composer focus-within:border-fg-3 ${dragging() ? 'border-fg-3' : 'border-edge'} ${props.disabled ? 'opacity-50' : ''}`}
       onDragOver={(e) => {
         if (!e.dataTransfer?.types.includes('Files')) return
         e.preventDefault()
@@ -341,7 +341,7 @@ function ComposerPanel(props: {
   return (
     <div
       ref={props.ref}
-      class="absolute inset-x-0 bottom-full z-10 mb-2 max-h-[70vh] origin-bottom animate-[pop-in_120ms_ease-out] overflow-y-auto rounded-2xl border border-edge bg-bg p-1 pop shadow-(--shadow-pop)"
+      class="absolute inset-x-0 bottom-full z-10 mb-2 max-h-[70vh] origin-bottom animate-[pop-in_120ms_ease-out] overflow-y-auto rounded-composer border border-edge bg-bg p-1 pop shadow-(--shadow-pop)"
     >
       <PanelChoices label="Permission mode" options={MODES} value={props.mode} onPick={props.onMode} />
       <Show when={props.model}>

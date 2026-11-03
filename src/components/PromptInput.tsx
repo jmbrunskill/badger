@@ -573,7 +573,7 @@ export function PromptInput(props: {
             'min-height': cover() > 0 ? `${cover()}px` : undefined,
             'max-height': `max(18rem, ${cover()}px)`,
           }}
-          class="absolute -inset-x-px bottom-full z-10 mb-2 flex origin-bottom animate-[pop-in_120ms_ease-out] flex-col overflow-y-auto rounded-2xl border border-edge bg-bg p-1 pop shadow-(--shadow-pop)"
+          class="absolute -inset-x-px bottom-full z-10 mb-2 flex origin-bottom animate-[pop-in_120ms_ease-out] flex-col overflow-y-auto rounded-composer border border-edge bg-bg p-1 pop shadow-(--shadow-pop)"
         >
           {/* Down by the composer when there are only a few; the space above is only there to cover what's stacked there. */}
           <div ref={list} class="mt-auto">

@@ -31,6 +31,7 @@
  *
  *   --font-sans      the UI's typeface
  *   --roundness      scales every corner: 1 as designed, 0 square (rounded-round is a circle, scaled too)
+ *   --radius-composer the composer's corners, and those of what takes its place or pops up from it: 2xl by default
  *   --radius-pill    buttons' corners at least this round: 9999px makes them pills. Buttons
  *                    use rounded-button-{size}, the size's corners until --radius-pill is bigger
  *   --sidebar-gutter the space between the sidebar and the panes beside it: the frame's gutter by default
@@ -76,6 +77,7 @@
   --color-white: #fff;
 
   --radius-round: 9999px;
+  --radius-composer: 1rem;
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -142,6 +144,7 @@
   --radius-2xl: calc(1rem * var(--roundness));
   --radius-3xl: calc(1.5rem * var(--roundness));
   --radius-round: calc(9999px * var(--roundness));
+  --radius-composer: var(--radius-2xl);
 }
 [data-palette="light"] {
   --color-bg: #fafaf8;
@@ -157,6 +160,8 @@
   --color-ok: #3d7a4a;
   --color-selection: #3b74d9;
   --pane-ring: rgb(0 0 0 / 0.07);
+  /* Open mSupply's size: its 2xl, at its roundness. */
+  --radius-composer: 1.25rem;
 }
 [data-palette="dark"] {
   color-scheme: dark;
@@ -173,6 +178,7 @@
   --color-ok: #7cb08a;
   --color-selection: #5b8ff0;
   --pane-ring: rgb(255 255 255 / 0.1);
+  --radius-composer: 1.25rem;
 }
 /* True dark: near-black, as the dark theme first was. */
 [data-palette="black"] {

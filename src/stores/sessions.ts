@@ -37,7 +37,22 @@ const refreshSoon = () => {
 // Every connect loads, the first included, after the config, which the folder defaults need. The list may have
 // changed while the server was away.
 socket.onConnection((connected) => connected && void configReady.then(refresh).catch(() => {}))
+/**
+ * Child chats' parents, as their snapshots say: children aren't in the list, so this is how one on screen finds
+ * the chat to be listed under.
+ */
+const [childParents, setChildParents] = createStore<Record<string, { id: string; toolUseId: string; title: string }>>({})
+
+/** The chat a nested chat sits under, with how its row there reads: a side chat's, or a child chat's once it's been opened. */
+export function parentOf(id: string): { parent: string; title: string; toolUseId?: string } | undefined {
+  const side = sessionById(id)
+  if (side?.sideOf) return { parent: side.sideOf, title: side.title }
+  const child = childParents[id]
+  return child && { parent: child.id, title: child.title, toolUseId: child.toolUseId }
+}
+
 socket.on((e) => {
+  if (e.type === 'snapshot' && e.parent && !childParents[e.sessionId]) setChildParents(e.sessionId, e.parent)
   if (e.type === 'sessions_changed') refreshSoon()
   // Whether a chat is working shows at once. Anything else that changes with it, like its time, comes with the
   // sessions_changed the server sends too; a chat not listed yet needs the list.

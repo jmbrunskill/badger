@@ -589,6 +589,8 @@ export type ServerEvent =
       draftAttachments: DraftAttachments
       /** Chats this one started from a tool call and waited on, by that call's tool_use_id. */
       children: Record<string, string>
+      /** For a child chat: the chat that started it, and the call there that did, so it's listed under that. */
+      parent?: { id: string; toolUseId: string; title: string }
     })
   | { type: 'message'; sessionId: string; message: WireMessage }
   /** Another viewer changed the chat's unsent text or attachments. */

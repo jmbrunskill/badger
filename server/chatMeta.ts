@@ -101,6 +101,14 @@ export class ChatMeta {
     return Object.fromEntries(rows.map((r) => [r.tool_use_id, r.session_id]))
   }
 
+  /** For a child chat: the chat that started it, the call there that did, and what it's for. */
+  startedBy(sessionId: string): { parentId: string; toolUseId: string; kind: string } | undefined {
+    const row = this.db.sql.prepare('SELECT parent_session, tool_use_id, kind FROM child_sessions WHERE session_id = ?').get(sessionId) as
+      | { parent_session: string; tool_use_id: string; kind: string }
+      | undefined
+    return row && { parentId: row.parent_session, toolUseId: row.tool_use_id, kind: row.kind }
+  }
+
   addFork(fork: { sessionId: string; sourceId: string; cwd: string; worktree?: string; note?: string }): void {
     this.db.sql
       .prepare('INSERT INTO forks (session_id, source_id, cwd, worktree, note, created_at) VALUES (?, ?, ?, ?, ?, ?)')

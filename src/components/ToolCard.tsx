@@ -1,5 +1,6 @@
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, type JSX } from 'solid-js'
 import { resolvePath, useOpenFile } from '../fileLinks.ts'
+import { PathLink } from './PathLink.tsx'
 import { highlightWhenSeen, highlighted, languageOf } from '../highlight.ts'
 import { Check, ChevronRight, CircleAlert, Loader2, Shield, Webhook } from '../icons'
 import type { Task } from '../tasks.ts'
@@ -479,7 +480,7 @@ export function ToolBody(props: ToolProps & { /** Fill the space given rather th
         {(s) => (
           <>
             <Show when={s().dir}>
-              <div class="font-mono text-xs text-fg-3">{s().dir}</div>
+              <PathLink path={`${s().dir}/SKILL.md`} title="Open the skill’s file as it is now" />
             </Show>
             <Markdown text={s().body} />
             <Hooks context={props.context} />

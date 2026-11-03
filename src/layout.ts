@@ -49,7 +49,7 @@ export const diffView = (session: string): DiffView => ({ kind: 'diff', session 
  * A file on its chat's machine, by absolute path: all of it, or its changes. `line` is where to go, and opening it
  * again bumps `nav`, which goes there again.
  */
-export type FileView = { kind: 'file'; session: string; path: string; line?: number; mode?: 'file' | 'diff'; nav?: number }
+export type FileView = { kind: 'file'; session: string; path: string; line?: number; mode?: 'file' | 'rendered' | 'diff'; nav?: number }
 export const viewKey = (v: View) =>
   v.kind === 'task'
     ? `task:${v.session}:${v.id}`
@@ -580,8 +580,8 @@ export function openFile(ws: Ws, view: FileView): void {
   openView(ws, view)
 }
 
-/** Switches a file's tab between all of it and its diff. */
-export function setFileMode(ws: Ws, view: FileView, mode: 'file' | 'diff'): void {
+/** Switches a file's tab between all of it, rendered if it's Markdown, and its diff. */
+export function setFileMode(ws: Ws, view: FileView, mode: NonNullable<FileView['mode']>): void {
   updateLayout(ws, (l) => ({ ...l, tree: replaceView(l.tree, { ...view, mode }) }))
 }
 

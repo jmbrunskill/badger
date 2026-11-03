@@ -57,8 +57,13 @@ export async function baseOf(path: string, wait = false): Promise<Base | undefin
 /** For picking a base by hand: the likely ones, nearest first, and every other branch by name. */
 export async function baseChoices(path: string): Promise<BaseChoices> {
   const [branch, current] = await Promise.all([git(path, 'branch', '--show-current'), baseOf(path)])
-  const [{ candidates }, refs] = await Promise.all([nearest(path, branch), git(path, 'for-each-ref', '--sort=-committerdate', '--format=%(refname)', 'refs/heads', 'refs/remotes')])
+  const [{ candidates }, refs, upstream] = await Promise.all([
+    nearest(path, branch),
+    git(path, 'for-each-ref', '--sort=-committerdate', '--format=%(refname)', 'refs/heads', 'refs/remotes'),
+    branch ? upstreamOf(path, branch) : undefined,
+  ])
   const likely = new Set(candidates.map((c) => c.branch))
+  if (upstream) likely.add(upstream.branch)
   const others = refs
     .split('\n')
     // By its full name, since a remote's HEAD shortens to just the remote's name.
@@ -69,6 +74,7 @@ export async function baseChoices(path: string): Promise<BaseChoices> {
     branch,
     current: current && { branch: current.branch, how: current.how },
     set: branch ? await git(path, 'config', '--get', configKey(branch)).catch(() => undefined) : undefined,
+    upstream,
     likely: candidates.map(({ branch, ahead }) => ({ branch, ahead })),
     others,
   }
@@ -86,6 +92,16 @@ export async function setBase(path: string, base: string | null): Promise<void> 
   const isBranch = async (ref: string) => git(path, 'show-ref', '--verify', '--quiet', ref).then(() => true, () => false)
   if (base && !(await isBranch(`refs/heads/${base}`)) && !(await isBranch(`refs/remotes/${base}`))) throw new Error(`There's no branch called ${base}`)
   await git(path, 'config', configKey(branch), base)
+}
+
+/** The branch's upstream, else its namesake on origin: the commits HEAD has that it doesn't are the ones to push. */
+async function upstreamOf(path: string, branch: string): Promise<{ branch: string; ahead: number } | undefined> {
+  const tracked = await git(path, 'rev-parse', '-q', '--verify', '--symbolic-full-name', `${branch}@{upstream}`).catch(() => '')
+  const fallback = `refs/remotes/origin/${branch}`
+  const ref = tracked.startsWith('refs/remotes/') ? tracked : (await commitOf(path, fallback)) ? fallback : undefined
+  if (!ref) return undefined
+  const ahead = Number(await git(path, 'rev-list', '--count', `${ref}..HEAD`).catch(() => NaN))
+  return Number.isFinite(ahead) ? { branch: shortName(ref), ahead } : undefined
 }
 
 const commitOf = (path: string, ref: string) => git(path, 'rev-parse', '-q', '--verify', `${ref}^{commit}`).catch(() => '')

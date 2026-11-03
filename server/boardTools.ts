@@ -19,6 +19,7 @@ export const BOARD_INSTRUCTIONS = [
   `Statuses, in board order: ${CARD_STATUSES.join(', ')}.`,
   "Every Badger tool (these, the terminal ones and the preview ones) can also be called from code: run_script runs JavaScript in which they're `badger.cards.list(...)` and so on, returning data rather than text. Use it for bulk changes, or anything you'd otherwise do in many calls or that needs filtering.",
   'The chat draws ```mermaid fences as diagrams. Use one when a flow, sequence or structure is clearer drawn than described.',
+  "In the chat, a Markdown link to a file opens it beside the chat, at the line if it ends in :line; a path in backticks is plain text. So write file references as links to the absolute path, e.g. [session.ts:42](/home/me/app/server/session.ts:42), not `server/session.ts:42`. Wrap the target in <> if it has spaces.",
 ].join('\n')
 
 const status = z.enum(CARD_STATUSES)

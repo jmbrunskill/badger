@@ -1,9 +1,7 @@
 import { createHash } from 'node:crypto'
-import { dirname, resolve } from 'node:path'
 import type { BaseChoices } from '../shared/protocol.ts'
 import { run } from './proc.ts'
-
-const git = async (cwd: string, ...args: string[]) => (await run('git', args, { cwd })).stdout.trim()
+import { type Repo, git, readRepo, tipOf } from './repo.ts'
 
 /** Where a branch picked by hand is kept: in the repo's own config, so every checkout of the branch has it. */
 const configKey = (branch: string) => `branch.${branch}.badgerBase`
@@ -33,22 +31,42 @@ export interface Base {
   how: 'set' | 'pr' | 'nearest'
 }
 
-/** Pass `wait` to wait, briefly, on asking GitHub for the pull request the first time, rather than guess this once. */
-export async function baseOf(path: string, wait = false): Promise<Base | undefined> {
-  const branch = await git(path, 'branch', '--show-current')
+/** What working out a checkout's base needs: its repo, its branch (empty with HEAD detached) and HEAD's commit (empty with none yet). */
+export interface Here {
+  repo: Repo
+  branch: string
+  head: string
+}
+
+async function here(path: string): Promise<Here> {
+  const [repo, branch, head] = await Promise.all([
+    readRepo(path),
+    git(path, 'branch', '--show-current'),
+    git(path, 'rev-parse', '-q', '--verify', 'HEAD').catch(() => ''),
+  ])
+  return { repo, branch, head }
+}
+
+/**
+ * Pass `wait` to wait, briefly, on asking GitHub for the pull request the first time, rather than guess this once.
+ * Pass `at` when it's known already, as gitStatus does.
+ */
+export async function baseOf(path: string, wait = false, at?: Here): Promise<Base | undefined> {
+  at ??= await here(path)
+  const { repo, branch } = at
   if (branch) {
     const set = await git(path, 'config', '--get', configKey(branch)).catch(() => undefined)
     if (set !== undefined) {
       // Set to nothing: no base, on purpose.
       if (!set) return undefined
-      const sha = await commitOf(path, set)
+      const sha = tipOf(repo, set)
       if (sha) return { branch: set, sha, how: 'set' }
     }
   }
-  const { candidates, trunk } = await nearest(path, branch)
+  const { candidates, trunk } = await nearest(path, at)
   if (trunk) return undefined
-  const pr = branch ? await prBase(path, branch, wait) : undefined
-  const prSha = pr && (await commitOf(path, pr))
+  const pr = branch ? await prBase(path, branch, wait, repo) : undefined
+  const prSha = pr && tipOf(repo, pr)
   if (pr && prSha) return { branch: pr, sha: prSha, how: 'pr' }
   const best = candidates[0]
   return best && { branch: best.branch, sha: best.sha, how: 'nearest' }
@@ -56,13 +74,14 @@ export async function baseOf(path: string, wait = false): Promise<Base | undefin
 
 /** For picking a base by hand: the likely ones, nearest first, and every other branch by name. */
 export async function baseChoices(path: string): Promise<BaseChoices> {
-  const [branch, current] = await Promise.all([git(path, 'branch', '--show-current'), baseOf(path)])
-  const [{ candidates }, refs] = await Promise.all([nearest(path, branch), git(path, 'for-each-ref', '--sort=-committerdate', '--format=%(refname)', 'refs/heads', 'refs/remotes')])
+  const at = await here(path)
+  const { repo, branch } = at
+  const [current, { candidates }] = await Promise.all([baseOf(path, false, at), nearest(path, at)])
   const likely = new Set(candidates.map((c) => c.branch))
-  const others = refs
-    .split('\n')
+  const others = repo.refs
+    .map((r) => r.ref)
     // By its full name, since a remote's HEAD shortens to just the remote's name.
-    .filter((r) => r && !/^refs\/remotes\/[^/]+\/HEAD$/.test(r))
+    .filter((r) => !/^refs\/remotes\/[^/]+\/HEAD$/.test(r))
     .map(shortName)
     .filter((r) => r !== branch && !likely.has(r))
   return {
@@ -88,7 +107,6 @@ export async function setBase(path: string, base: string | null): Promise<void> 
   await git(path, 'config', configKey(branch), base)
 }
 
-const commitOf = (path: string, ref: string) => git(path, 'rev-parse', '-q', '--verify', `${ref}^{commit}`).catch(() => '')
 const shortName = (ref: string) => ref.replace(/^refs\/(heads|remotes)\//, '')
 
 interface Candidate {
@@ -108,26 +126,22 @@ const nearestCache = new Map<string, Promise<Candidate[]>>()
  * branch off it), then the main checkout's branch, then the default one, then a local branch over a remote one.
  * `trunk`: the branch is one of these itself.
  */
-async function nearest(path: string, branch: string): Promise<{ candidates: Candidate[]; trunk: boolean }> {
-  const common = resolve(path, await git(path, 'rev-parse', '--git-common-dir'))
-  const [head, refs, mainBranch, remoteHeads, remoteList] = await Promise.all([
-    git(path, 'rev-parse', '-q', '--verify', 'HEAD').catch(() => ''),
-    git(path, 'for-each-ref', '--sort=-committerdate', '--format=%(refname)%00%(objectname)', 'refs/heads', 'refs/remotes'),
-    git(dirname(common), 'branch', '--show-current').catch(() => ''),
-    git(path, 'for-each-ref', '--format=%(symref:short)', 'refs/remotes/*/HEAD').catch(() => ''),
-    git(path, 'remote').catch(() => ''),
-  ])
-  const defaults = new Set(remoteHeads.split('\n').filter(Boolean).flatMap((r) => [r, r.slice(r.indexOf('/') + 1)]))
+async function nearest(path: string, { repo, branch, head }: Here): Promise<{ candidates: Candidate[]; trunk: boolean }> {
+  const { remotes, mainBranch } = repo
+  // Each remote's default branch, as origin/main and main.
+  const defaults = new Set(
+    repo.refs
+      .filter((r) => r.symref && /^refs\/remotes\/[^/]+\/HEAD$/.test(r.ref))
+      .map((r) => shortName(r.symref))
+      .flatMap((r) => [r, r.slice(r.indexOf('/') + 1)]),
+  )
   const isTrunk = (name: string) => TRUNK.test(name) || defaults.has(name)
   const trunk = !!branch && isTrunk(branch)
   if (!head || trunk) return { candidates: [], trunk }
 
-  const remotes = remoteList.split('\n').filter(Boolean)
   const found: (Omit<Candidate, 'ahead'> & { name: string; rank: number })[] = []
   let named = 0
-  for (const line of refs.split('\n')) {
-    const [ref, sha] = line.split('\0')
-    if (!ref || !sha) continue
+  for (const { ref, sha } of repo.refs) {
     const local = ref.startsWith('refs/heads/')
     const short = shortName(ref)
     if (!local && short.endsWith('/HEAD')) continue
@@ -180,10 +194,9 @@ const PR_MS = 5 * 60_000
  * without gh, a GitHub remote or a PR. gh finds the PR from the branch's own remote and upstream, so another fork's
  * PR from a branch of the same name isn't taken for it.
  */
-async function prBase(path: string, branch: string, wait: boolean): Promise<string | undefined> {
-  const [common, urls] = await Promise.all([git(path, 'rev-parse', '--git-common-dir'), git(path, 'remote', '-v').catch(() => '')])
-  if (!/github/i.test(urls)) return undefined
-  const key = `${resolve(path, common)}\0${branch}`
+async function prBase(path: string, branch: string, wait: boolean, repo: Repo): Promise<string | undefined> {
+  if (!repo.github) return undefined
+  const key = `${repo.common}\0${branch}`
   let hit = prCache.get(key)
   if (!hit || Date.now() - hit.at > PR_MS) {
     const base = (async () => {
@@ -195,7 +208,9 @@ async function prBase(path: string, branch: string, wait: boolean): Promise<stri
       const pr = JSON.parse(stdout) as { baseRefName?: string; state?: string }
       if (pr.state !== 'OPEN' || !pr.baseRefName) return undefined
       const remote = (await git(path, 'config', `branch.${branch}.remote`).catch(() => '')) || 'origin'
-      for (const ref of [`${remote}/${pr.baseRefName}`, pr.baseRefName]) if (await commitOf(path, ref)) return ref
+      // Read again, since this is kept a while: a fetch since may have brought the remote's copy in.
+      const now = await readRepo(path)
+      for (const ref of [`${remote}/${pr.baseRefName}`, pr.baseRefName]) if (tipOf(now, ref)) return ref
       return undefined
     })().catch(() => undefined)
     prCache.set(key, (hit = { at: Date.now(), base }))

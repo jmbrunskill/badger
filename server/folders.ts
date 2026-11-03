@@ -3,6 +3,7 @@ import { readdir, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { Checkout, FileEntry, Folder, Listing } from '../shared/protocol.ts'
 import { run } from './proc.ts'
+import { type Repo, readRepo } from './repo.ts'
 import { git, gitStatus, inaccessible, mainCheckout } from './workspace.ts'
 
 /** A git command's output, or undefined if it failed, e.g. counting commits in a repo with none. */
@@ -24,24 +25,27 @@ async function worktrees(main: string): Promise<{ path: string; branch: string; 
   )
 }
 
-async function checkout(path: string, branch: string, main: boolean, remotes: boolean): Promise<Checkout> {
-  const [git, unpushed, committed] = await Promise.all([
-    gitStatus(path).catch(() => undefined),
-    remotes ? tryGit(path, 'rev-list', '--count', 'HEAD', '--not', '--remotes') : undefined,
-    tryGit(path, 'log', '-1', '--format=%ct'),
+async function checkout(path: string, branch: string, main: boolean, repo: Repo): Promise<Checkout> {
+  const remotes = repo.remotes.length > 0
+  const git = await gitStatus(path, false, Promise.resolve(repo)).catch(() => undefined)
+  // Without an upstream, gitStatus has counted what no remote has already. A detached HEAD's commit isn't any branch's.
+  const [unpushed, committed] = await Promise.all([
+    !remotes ? undefined : git?.upstream === undefined && git?.remote ? git.ahead : tryGit(path, 'rev-list', '--count', 'HEAD', '--not', '--remotes'),
+    repo.refs.find((r) => r.ref === `refs/heads/${branch}`)?.committedAt ?? tryGit(path, 'log', '-1', '--format=%ct').then((t) => Number(t ?? 0) * 1000),
   ])
   return {
     path,
     main,
     git: git ?? { branch, changes: 0, added: 0, removed: 0, ahead: 0, behind: 0 },
     unpushed: remotes ? Number(unpushed ?? 0) : null,
-    committedAt: Number(committed ?? 0) * 1000,
+    committedAt: committed,
   }
 }
 
-async function repoCheckouts(main: string): Promise<Checkout[]> {
-  const [trees, remotes] = await Promise.all([worktrees(main), tryGit(main, 'remote')])
-  const all = await Promise.all(trees.map((w) => checkout(w.path, w.branch, w.main, !!remotes)))
+async function repoCheckouts(main: string): Promise<Checkout[] | undefined> {
+  const [trees, repo] = await Promise.all([worktrees(main), readRepo(main).catch(() => undefined)])
+  if (!repo) return undefined
+  const all = await Promise.all(trees.map((w) => checkout(w.path, w.branch, w.main, repo)))
   return all.sort((a, b) => Number(b.main) - Number(a.main) || b.committedAt - a.committedAt)
 }
 

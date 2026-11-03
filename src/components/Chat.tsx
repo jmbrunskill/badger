@@ -132,7 +132,11 @@ export function Chat(props: {
   // A subagent's panel shows none of the chat's child chats, so it needn't follow them a second time.
   const children = props.host ? { state: () => undefined, prompts: () => [] } : createChildChats(state)
 
-  const sticky = createStickyScroll(`chat:${untrack(() => props.sessionId)}${untrack(() => (props.host ? `:${props.host.id}` : ''))}`)
+  // Not before the first message: until then it's the new chat's folder picker, read from the top.
+  const sticky = createStickyScroll(
+    `chat:${untrack(() => props.sessionId)}${untrack(() => (props.host ? `:${props.host.id}` : ''))}`,
+    () => state.messages.length > 0,
+  )
   let content!: HTMLDivElement
   let bottom!: HTMLDivElement
   let scroller!: HTMLDivElement

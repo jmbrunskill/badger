@@ -3,8 +3,11 @@ import { accessSync, constants, existsSync, mkdirSync, writeFileSync, statSync }
 import { appendFile, mkdir, open, readFile, stat } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { BranchChoices, GitStatus, WorktreeStatus } from '../shared/protocol.ts'
-import { baseOf } from './base.ts'
+import { type Here, baseOf } from './base.ts'
 import { run } from './proc.ts'
+import { type Repo, git, readRepo, readStatus } from './repo.ts'
+
+export { git }
 
 /** The git root of a directory (each worktree has its own), or the directory itself outside a repo. */
 export function workspaceRoot(cwd: string): string {
@@ -33,8 +36,6 @@ export function inaccessible(dir: string): boolean {
     return true
   }
 }
-
-export const git = async (cwd: string, ...args: string[]) => (await run('git', args, { cwd })).stdout.trim()
 
 /** Commits in a range, e.g. `@{upstream}..HEAD`. */
 const count = async (path: string, range: string) => Number(await git(path, 'rev-list', '--count', range))
@@ -116,33 +117,34 @@ async function newLines(file: string): Promise<number> {
   }
 }
 
-/** Where a checkout stands; fetching first, at most once a minute per repo, so "behind" is up to date. Undefined outside a repo. */
-export async function gitStatus(path: string, fetch = false): Promise<GitStatus | undefined> {
-  const status = await git(path, 'status', '--porcelain').catch(() => undefined)
-  if (status === undefined) return undefined
-  const common = resolve(path, await git(path, 'rev-parse', '--git-common-dir'))
-  const [branch, remotes] = await Promise.all([git(path, 'branch', '--show-current'), git(path, 'remote')])
-  const remoteList = remotes ? remotes.split('\n') : []
-  const remote = remoteList.includes('origin') ? 'origin' : remoteList.length === 1 ? remoteList[0] : undefined
-  if (fetch && remoteList.length) await fetchRepo(path, common, branch, remote)
-  const upstream = await git(path, 'rev-parse', '--abbrev-ref', '@{upstream}').catch(() => '')
-  const [ahead, behind] = upstream
-    ? await Promise.all([count(path, '@{upstream}..HEAD'), count(path, 'HEAD..@{upstream}')])
-    : [remote ? Number(await git(path, 'rev-list', '--count', 'HEAD', '--not', '--remotes')) : 0, 0]
-  // One with no commits yet has nothing to compare.
-  const base = await baseStatus(path).catch(() => undefined)
-  const [fetchedAt, lines] = await Promise.all([
+/**
+ * Where a checkout stands; fetching first, at most once a minute per repo, so "behind" is up to date. Undefined outside a repo.
+ * Pass `repo` when it's read already, e.g. once for every worktree of a repo.
+ */
+export async function gitStatus(path: string, fetch = false, repo?: Promise<Repo>): Promise<GitStatus | undefined> {
+  const [status, shared] = await Promise.all([readStatus(path).catch(() => undefined), (repo ?? readRepo(path)).catch(() => undefined)])
+  if (!status || !shared) return undefined
+  const { branch, head, upstream, changes } = status
+  const { common, remotes } = shared
+  const remote = remotes.includes('origin') ? 'origin' : remotes.length === 1 ? remotes[0] : undefined
+  // A fetch moves remote branches, so everything's read again after one.
+  if (fetch && remotes.length && (await fetchRepo(path, common, branch, remote))) return gitStatus(path)
+  const [ahead, behind] = upstream ? [status.ahead, status.behind] : [remote ? Number(await git(path, 'rev-list', '--count', 'HEAD', '--not', '--remotes')) : 0, 0]
+  const [base, fetchedAt, lines] = await Promise.all([
+    // One with no commits yet has nothing to compare.
+    baseStatus(path, { repo: shared, branch, head }).catch(() => undefined),
     stat(join(common, 'FETCH_HEAD')).then((s) => s.mtimeMs, () => undefined),
-    status ? lineChanges(path) : { added: 0, removed: 0 },
+    changes ? lineChanges(path) : { added: 0, removed: 0 },
   ])
-  return { branch, changes: changed(status), ...lines, upstream: upstream || undefined, ahead, behind, remote, base, fetchedAt }
+  return { branch, changes, ...lines, upstream, ahead, behind, remote, base, fetchedAt }
 }
 
 /** How a branch compares with its base. */
-async function baseStatus(path: string): Promise<GitStatus['base']> {
-  const base = await baseOf(path)
+async function baseStatus(path: string, at: Here): Promise<GitStatus['base']> {
+  const base = await baseOf(path, false, at)
   if (!base) return undefined
-  const [ahead, behind] = await Promise.all([count(path, `${base.sha}..HEAD`), count(path, `HEAD..${base.sha}`)])
+  // The base's commits HEAD doesn't have, then HEAD's it doesn't.
+  const [behind, ahead] = (await git(path, 'rev-list', '--left-right', '--count', `${base.sha}...HEAD`)).split(/\s+/).map(Number)
   return { branch: base.branch, how: base.how, ahead, behind }
 }
 
@@ -159,11 +161,14 @@ const gitRemote = (cwd: string, ...args: string[]) =>
     },
   )
 
-/** One fetch per repo at a time, and none if the last was under a minute ago. Failing (offline, no login) just leaves the counts as they were. */
+/**
+ * One fetch per repo at a time, and none if the last was under a minute ago. Failing (offline, no login) just leaves the counts as they were.
+ * False if it didn't fetch, so there's nothing new to read.
+ */
 const fetching = new Map<string, Promise<unknown>>()
-async function fetchRepo(path: string, common: string, branch: string, fallback?: string): Promise<void> {
+async function fetchRepo(path: string, common: string, branch: string, fallback?: string): Promise<boolean> {
   const last = await stat(join(common, 'FETCH_HEAD')).then((s) => s.mtimeMs, () => 0)
-  if (Date.now() - last < 60_000) return
+  if (Date.now() - last < 60_000) return false
   if (!fetching.has(common)) {
     const remote = (branch && (await git(path, 'config', `branch.${branch}.remote`).catch(() => ''))) || fallback
     const done = gitRemote(path, 'fetch', '--quiet', ...(remote ? [remote] : ['--all']))
@@ -172,6 +177,7 @@ async function fetchRepo(path: string, common: string, branch: string, fallback?
     fetching.set(common, done)
   }
   await fetching.get(common)
+  return true
 }
 
 /** Push the branch, publishing it to the remote first if it has no upstream yet. */

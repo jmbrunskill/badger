@@ -38,7 +38,8 @@ export function BranchPicker(props: {
       label: b.name,
       selected: b.name === c.branch,
       // By its worktree's name, or its folder's for any other checkout: whole paths never fit.
-      ...(b.elsewhere ? { hint: `in ${worktreeOf(b.elsewhere)?.name ?? basename(b.elsewhere)}` } : b.remote ? { hint: 'remote' } : {}),
+      // One out elsewhere is switched to detached: git won't have it out in two checkouts.
+      ...(b.elsewhere ? { hint: `in ${worktreeOf(b.elsewhere)?.name ?? basename(b.elsewhere)}, detached` } : b.remote ? { hint: 'remote' } : {}),
       pick: () => b.name !== c.branch && go(b.name),
     }))
     const name = q.trim()

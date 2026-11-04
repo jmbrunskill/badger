@@ -300,6 +300,8 @@ export function Menu(props: {
     if (refocus) trigger.focus()
   }
   const pick = (i: number) => {
+    // Items can go while it's open, leaving the highlight past the end.
+    if (!props.items[i]) return
     if (!props.items[i].expands) close()
     props.onPick(i)
   }

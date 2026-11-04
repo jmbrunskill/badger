@@ -942,7 +942,9 @@ export function ReviewPage(props: {
                 </div>
               </Show>
               <Show when={diff() && !total() && !loading()}>
-                <p class="p-10 text-center text-fg-3">Nothing to review: no changes that aren’t on the base already.</p>
+                <p class="p-10 text-center text-fg-3">
+                  {props.only ? 'This file has no changes that aren’t on the base already.' : 'Nothing to review: no changes that aren’t on the base already.'}
+                </p>
               </Show>
 
               <For each={sections()}>

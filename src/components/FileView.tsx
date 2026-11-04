@@ -126,11 +126,12 @@ export function FileView(props: {
     const root = diff()?.root
     return root && props.path.startsWith(`${root}/`) ? props.path.slice(root.length + 1) : undefined
   }
-  /** Why its Diff can't be shown: the changes couldn't be read, or it isn't in them. */
+  /** Why its Diff can't be shown: there's no checkout, its changes couldn't be read, or the file is outside it. */
   const noDiff = () => {
+    if (!props.cwd) return 'There’s no checkout to diff this file against.'
     const c = changes()
     if (changes.loading && !c) return 'Reading the changes…'
-    return c && 'error' in c ? `Couldn’t read the changes: ${c.error}` : 'This file isn’t in the checkout’s changes.'
+    return c && 'error' in c ? `Couldn’t read the changes: ${c.error}` : 'This file isn’t in the checkout, so it has no diff.'
   }
 
   const text = () => {
@@ -259,7 +260,19 @@ export function FileView(props: {
     <Show
       when={props.mode !== 'diff'}
       fallback={
-        <Show when={relative()} fallback={<p class="p-6 text-center text-ui text-fg-3">{noDiff()}</p>}>
+        <Show
+          when={relative()}
+          fallback={
+            // Its bar stays, so the other views are still a click away.
+            <div class="flex min-h-0 flex-1 flex-col text-ui">
+              <PaneBar class="whitespace-nowrap text-fg-3">
+                {toggle()}
+                {crumbs()}
+              </PaneBar>
+              <p class="p-6 text-center text-fg-3">{noDiff()}</p>
+            </div>
+          }
+        >
           {(only) =>
             props.renderDiff(
               only(),

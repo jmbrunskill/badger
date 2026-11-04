@@ -181,9 +181,9 @@ export function Sidebar(props: {
                     {terminalLabel(t)}
                   </span>
                   <span
-                    class={`flex shrink-0 items-center gap-2 group-hover:invisible ${t.id === currentTerminal() ? 'pointer-coarse:invisible' : ''}`}
+                    class={`flex max-w-[40%] min-w-0 shrink-0 items-center gap-2 group-hover:invisible ${t.id === currentTerminal() ? 'pointer-coarse:invisible' : ''}`}
                   >
-                    <span class="text-meta text-fg-3">{basename(t.root)}</span>
+                    <span class="min-w-0 truncate text-meta text-fg-3">{basename(t.root)}</span>
                     <Show when={onMachine(t.machine)}>{(name) => <MachineName machine={t.machine} name={name()} class="text-meta text-fg-3" />}</Show>
                   </span>
                 </button>

@@ -1,5 +1,5 @@
 import { For, Show, createSignal, onCleanup, type JSX } from 'solid-js'
-import { BookOpen, Bot, ChevronRight, CircleAlert, Columns3, FileText, KeyRound, Scissors, Webhook } from '../icons'
+import { BookOpen, Bot, ChevronRight, CircleAlert, Columns3, FileText, GitBranch, KeyRound, Scissors, Webhook } from '../icons'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move } from '../../shared/forkNote.ts'
 import type { CardStatus } from '../../shared/protocol.ts'
@@ -169,6 +169,8 @@ export function contextChip(chip: Chip): ContextChip {
     }
     case 'hook':
       return { icon: Webhook, label: `${chip.hook ?? 'A'} hook`, body: () => <p class="whitespace-pre-wrap">{chip.text}</p> }
+    case 'git':
+      return { icon: GitBranch, label: 'Git changed', body: () => <p class="whitespace-pre-wrap">{chip.text}</p> }
     case 'hook_error':
       return {
         icon: CircleAlert,

@@ -8,7 +8,7 @@ import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '.
 import { inWs, terminalLabel, terminalState, terminalTooltip, terminals, terminalsListed, type Ws } from '../terminals.ts'
 import { TerminalView } from './TerminalView.tsx'
 import { showError } from './Popover.tsx'
-import { Loading, ghostClass, ltr } from './ui.tsx'
+import { Loading, Menu, ghostClass, ltr } from './ui.tsx'
 
 /** Green while running, red if it failed or was killed, grey once it exited cleanly. */
 export function StatusDot(props: { terminal: TerminalInfo }) {
@@ -48,32 +48,60 @@ export function RestartButton(props: { terminal: TerminalInfo }) {
   )
 }
 
+/** More ports than this and they go in a menu, so a terminal listening on ten doesn't crowd its bar. */
+const INLINE_PORTS = 2
+
 /**
  * A button per port the terminal is listening on, to preview it: onOpen, or
- * without it a link to the preview in a new browser tab.
+ * without it a link to the preview in a new browser tab. Past INLINE_PORTS
+ * they're one menu instead.
  */
 export function PortButtons(props: { terminal: TerminalInfo; onOpen?: (port: number) => void }) {
+  const ports = () => props.terminal.ports ?? []
+  const url = (port: number) => previewUrl(port, '/', props.terminal.machine || LOCAL)
+  const open = (port: number) => (props.onOpen ? props.onOpen(port) : window.open(url(port), '_blank', 'noopener'))
+  const cls = 'flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs tabular-nums text-fg-3 transition-colors hover:bg-surface hover:text-fg'
   return (
     <Show when={previewsAvailable(props.terminal.machine || LOCAL)}>
-      <For each={props.terminal.ports ?? []}>
-        {(port) => {
-          const cls = 'flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs tabular-nums text-fg-3 transition-colors hover:bg-surface hover:text-fg'
-          const label = (
+      <Show
+        when={ports().length > INLINE_PORTS}
+        fallback={
+          <For each={ports()}>
+            {(port) => {
+              const label = (
+                <>
+                  <Globe class="size-3.5" />:{port}
+                </>
+              )
+              return props.onOpen ? (
+                <button onClick={() => open(port)} title={`Preview port ${port} in a panel`} class={cls}>
+                  {label}
+                </button>
+              ) : (
+                <a href={url(port)} target="_blank" rel="noopener" title={`Open port ${port} in a new browser tab`} class={cls}>
+                  {label}
+                </a>
+              )
+            }}
+          </For>
+        }
+      >
+        <Menu
+          items={ports().map((port) => ({ label: `:${port}` }))}
+          onPick={(i) => open(ports()[i])}
+          placement="bottom"
+          align="right"
+          class="w-36"
+          title={`Listening on ${ports().length} ports: ${props.onOpen ? 'preview one in a panel' : 'open one in a new browser tab'}`}
+          triggerClass={(isOpen) => `${cls} ${isOpen ? 'bg-surface text-fg' : ''}`}
+          trigger={() => (
             <>
-              <Globe class="size-3.5" />:{port}
+              <Globe class="size-3.5" />
+              {ports().length}
             </>
-          )
-          return props.onOpen ? (
-            <button onClick={() => props.onOpen!(port)} title={`Preview port ${port} in a panel`} class={cls}>
-              {label}
-            </button>
-          ) : (
-            <a href={previewUrl(port, '/', props.terminal.machine || LOCAL)} target="_blank" rel="noopener" title={`Open port ${port} in a new browser tab`} class={cls}>
-              {label}
-            </a>
-          )
-        }}
-      </For>
+          )}
+        />
+      </Show>
     </Show>
   )
 }

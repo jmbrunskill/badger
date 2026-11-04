@@ -115,6 +115,13 @@ export interface SessionSummary {
   gone?: boolean
   /** A review chat: it guides you through its checkout's changes, and its page shows them. */
   review?: boolean
+  /**
+   * It hasn't started: it's a draft, listed because something's typed in it. Its folder and machine are where it
+   * will run, and its title the start of what's typed.
+   */
+  unstarted?: boolean
+  /** Something's typed in it and not sent. */
+  draft?: boolean
   /** A side chat (/btw): the chat it's under, shown in a panel beside that rather than in the sidebar. */
   sideOf?: string
   /** For a side chat, when it was forked: it knows its parent as it was then. */
@@ -420,6 +427,31 @@ export type ImageAttachment = { mediaType: (typeof IMAGE_TYPES)[number]; data: s
 /** Big pastes and images waiting in the composer to be sent. */
 export type DraftAttachments = { pastes: string[]; images: ImageAttachment[] }
 
+export const NO_ATTACHMENTS: DraftAttachments = { pastes: [], images: [] }
+export const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0
+
+/** Where a chat that hasn't started will run: its runner, the folder there, and whether in a new worktree of it. */
+export type StartAt = { machine: string; cwd?: string; worktree?: boolean }
+
+/**
+ * What's in a chat's composer and not sent, kept on the hub so it survives reloads and every tab shows the same.
+ * A chat that hasn't started keeps where it will run with it, once that's been picked or something's typed.
+ */
+export type Draft = { text: string; attachments: DraftAttachments; start?: StartAt }
+
+export const NO_DRAFT: Draft = { text: '', attachments: NO_ATTACHMENTS }
+
+/** Parts of a draft to replace. A start of null clears it, since an undefined one doesn't survive being sent. */
+export type DraftChange = { text?: string; attachments?: DraftAttachments; start?: StartAt | null }
+
+export function changeDraft(draft: Draft, change: DraftChange): Draft {
+  const { start, ...rest } = change
+  const next = { ...draft, ...rest }
+  if (start === null) delete next.start
+  else if (start) next.start = start
+  return next
+}
+
 /** A message sent while Claude was busy, which Claude Code holds until its next break; it can be withdrawn until then. */
 export interface QueuedMessage {
   id: string
@@ -509,8 +541,8 @@ export type ClientEvent =
   /** With edit, a withdrawn message goes back into the composer ahead of what's typed there. */
   | { type: 'unqueue'; sessionId: string; id: string; edit?: boolean }
   | (Exclude<ChatCommand, { type: 'unqueue' }> & { sessionId: string })
-  /** The composer's unsent text and attachments; each one given replaces what's saved. */
-  | { type: 'draft'; sessionId: string; text?: string; attachments?: DraftAttachments }
+  /** Parts of a chat's draft; each one given replaces what's saved. */
+  | ({ type: 'draft'; sessionId: string } & DraftChange)
   /** An uncaught error in the page, for the server to log. */
   | { type: 'client_error'; message: string; stack?: string; url: string }
   /** The user is looking at this chat, so it's no longer unread. */
@@ -586,17 +618,16 @@ export type ServerEvent =
       machine?: string
       /** Its folder is gone or can't be opened, e.g. a worktree removed after merging, so it can't run. */
       gone?: boolean
-      /** Unsent composer text, in the same message as the transcript so they arrive together. */
-      draft: string
-      draftAttachments: DraftAttachments
+      /** In the same message as the transcript, so they arrive together. */
+      draft: Draft
       /** Chats this one started from a tool call and waited on, by that call's tool_use_id. */
       children: Record<string, string>
       /** For a child chat: the chat that started it, and the call there that did, so it's listed under that. */
       parent?: { id: string; toolUseId: string; title: string }
     })
   | { type: 'message'; sessionId: string; message: WireMessage }
-  /** Another viewer changed the chat's unsent text or attachments. */
-  | { type: 'draft'; sessionId: string; text?: string; attachments?: DraftAttachments }
+  /** Parts of the chat's draft changed, by another viewer or the hub. */
+  | ({ type: 'draft'; sessionId: string } & DraftChange)
   /** Live output from a running Bash command; the tool_result still carries the final output. */
   | { type: 'bash_output'; sessionId: string; toolUseId: string; chunk: string }
   /** The calls auto mode is still deciding whether to allow; replaces the previous set. */

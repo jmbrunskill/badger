@@ -1,8 +1,10 @@
-import type { DraftAttachments } from '../shared/protocol.ts'
+import { NO_ATTACHMENTS, hasAttachments, type Draft, type StartAt } from '../shared/protocol.ts'
 import type { Actor, Database } from './db.ts'
 
-/** A chat's unsent composer contents. */
-export type Draft = { text: string; attachments: DraftAttachments }
+const UNTYPED_DRAFT_MS = 7 * 24 * 60 * 60 * 1000
+
+type StartRow = { machine: string; cwd: string | null; worktree: number }
+const startAt = (r: StartRow): StartAt => ({ machine: r.machine, ...(r.cwd ? { cwd: r.cwd } : {}), ...(r.worktree ? { worktree: true } : {}) })
 
 /**
  * What the hub keeps about each chat besides its transcript and card: its
@@ -14,7 +16,9 @@ export class ChatMeta {
   constructor(
     private db: Database,
     private onArchived: () => void = () => {},
-  ) {}
+  ) {
+    this.dropUntypedDrafts()
+  }
 
   archivedIds(): Set<string> {
     const rows = this.db.sql.prepare('SELECT session_id FROM archived_sessions').all() as { session_id: string }[]
@@ -35,25 +39,57 @@ export class ChatMeta {
   }
 
   draft(sessionId: string): Draft {
-    const row = this.db.sql.prepare('SELECT text, attachments FROM session_drafts WHERE session_id = ?').get(sessionId) as
-      | { text: string; attachments: string | null }
+    const row = this.db.sql.prepare('SELECT text, attachments, machine, cwd, worktree FROM session_drafts WHERE session_id = ?').get(sessionId) as
+      | { text: string; attachments: string | null; machine: string | null; cwd: string | null; worktree: number }
       | undefined
-    return { text: row?.text ?? '', attachments: row?.attachments ? JSON.parse(row.attachments) : { pastes: [], images: [] } }
+    return {
+      text: row?.text ?? '',
+      attachments: row?.attachments ? JSON.parse(row.attachments) : NO_ATTACHMENTS,
+      ...(row?.machine ? { start: startAt(row as StartRow) } : {}),
+    }
   }
 
-  /** Replaces the parts of the draft given. An empty draft is deleted rather than stored. */
-  setDraft(sessionId: string, change: Partial<Draft>): void {
-    const saved = this.draft(sessionId)
-    const text = change.text ?? saved.text
-    const attachments = change.attachments ?? saved.attachments
-    const attached = attachments.pastes.length > 0 || attachments.images.length > 0
-    if (!text && !attached) this.db.sql.prepare('DELETE FROM session_drafts WHERE session_id = ?').run(sessionId)
+  /** Replaces a chat's draft. One with nothing in it is deleted rather than stored. */
+  setDraft(sessionId: string, draft: Draft): void {
+    const { text, attachments, start } = draft
+    const attached = hasAttachments(attachments)
+    if (!text && !attached && !start) this.db.sql.prepare('DELETE FROM session_drafts WHERE session_id = ?').run(sessionId)
     else
       this.db.sql
         .prepare(
-          'INSERT INTO session_drafts (session_id, text, attachments, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, attachments = excluded.attachments, updated_at = excluded.updated_at',
+          `INSERT INTO session_drafts (session_id, text, attachments, machine, cwd, worktree, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, attachments = excluded.attachments, machine = excluded.machine,
+             cwd = excluded.cwd, worktree = excluded.worktree, updated_at = excluded.updated_at`,
         )
-        .run(sessionId, text, attached ? JSON.stringify(attachments) : null, Date.now())
+        .run(sessionId, text, attached ? JSON.stringify(attachments) : null, start?.machine ?? null, start?.cwd ?? null, start?.worktree ? 1 : 0, Date.now())
+  }
+
+  /**
+   * Every draft with something typed or attached: how it starts, what's attached, when it last changed, and where a
+   * chat that hasn't started will run. Attachments are counted, not read, since images can be big; one that can't be
+   * read counts as none, rather than keeping every chat from being listed.
+   */
+  typedDrafts(): { sessionId: string; text: string; pastes: number; images: number; start?: StartAt; updatedAt: number }[] {
+    const count = (path: string) => `CASE WHEN json_valid(attachments) THEN coalesce(json_array_length(attachments, '${path}'), 0) ELSE 0 END`
+    const rows = this.db.sql
+      .prepare(
+        `SELECT session_id, substr(text, 1, 500) AS text, machine, cwd, worktree, updated_at, ${count('$.pastes')} AS pastes, ${count('$.images')} AS images
+         FROM session_drafts WHERE text != '' OR attachments IS NOT NULL`,
+      )
+      .all() as ({ session_id: string; text: string; pastes: number; images: number; updated_at: number } & StartRow)[]
+    return rows.map((r) => ({
+      sessionId: r.session_id,
+      text: r.text,
+      pastes: r.pastes,
+      images: r.images,
+      ...(r.machine ? { start: startAt(r) } : {}),
+      updatedAt: r.updated_at,
+    }))
+  }
+
+  /** Drafts with nothing typed, only where a chat that never started was to run, once they're a week old. */
+  private dropUntypedDrafts(): void {
+    this.db.sql.prepare("DELETE FROM session_drafts WHERE text = '' AND attachments IS NULL AND updated_at < ?").run(Date.now() - UNTYPED_DRAFT_MS)
   }
 
   unreadIds(): Set<string> {

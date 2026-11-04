@@ -85,4 +85,16 @@ export const toggleArchived = (s: SessionSummary) => {
   return change(s.id, { archived }, () => (archived ? api.archive(s.id) : api.unarchive(s.id)))
 }
 
-export const renameSession = (id: string, title: string) => change(id, { title }, () => api.rename(id, title))
+/** Throws away what's typed in a chat. One that hasn't started is gone then. */
+export async function discardDraft(id: string): Promise<void> {
+  if (sessionById(id)?.unstarted) setList((l) => l.filter((s) => s.id !== id))
+  else patch(id, { draft: false })
+  try {
+    await api.discardDraft(id)
+  } catch (e) {
+    void refresh().catch(() => {})
+    throw e
+  }
+}
+
+export const renameSession =(id: string, title: string) => change(id, { title }, () => api.rename(id, title))

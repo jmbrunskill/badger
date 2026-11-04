@@ -10,12 +10,12 @@ import { openView, viewKey, viewShown } from '../layout.ts'
 import { LOCAL, onMachine } from '../machines.ts'
 import { navigate, route } from '../router.tsx'
 import { cardOf, cards, cardsLoaded, projectOfChat, projects } from '../stores/cards.ts'
-import { parentOf, sessions, sessionsLoaded, toggleArchived } from '../stores/sessions.ts'
+import { discardDraft, parentOf, sessions, sessionsLoaded, toggleArchived } from '../stores/sessions.ts'
 import { terminalLabel, terminalTooltip, terminalWs, terminals, wsKey } from '../terminals.ts'
 import { accountUsage } from '../usage.ts'
 import { ChatSummary, MachineName } from './ChatSummary.tsx'
 import { FileChat } from './FileChat.tsx'
-import { showError } from './Popover.tsx'
+import { confirmBy, showError } from './Popover.tsx'
 import { RenameChat } from './RenameChat.tsx'
 import { StatusDot } from './Terminals.tsx'
 import { AccountLimits } from './Usage.tsx'
@@ -278,6 +278,12 @@ function SessionRow(props: {
   onOpenChange: (open: boolean) => void
 }) {
   const s = () => props.session
+  const discard = async (from: Element) => {
+    props.onOpenChange(true)
+    const sure = await confirmBy(from, { message: 'Discard this draft?', notes: ['What’s typed and attached in it is gone for good.'], action: 'Discard' })
+    props.onOpenChange(false)
+    if (sure) discardDraft(s().id).catch((e: Error) => showError("Couldn't discard it", e.message))
+  }
   return (
     <>
       <div class="group relative mb-px">
@@ -315,18 +321,28 @@ function SessionRow(props: {
             triggerClass={(open) => ghostClass('sm', open)}
             trigger={() => <FolderInput class="size-3.5" />}
           />
-          <RenameChat
-            session={s()}
-            title="Rename"
-            onOpenChange={props.onOpenChange}
-            triggerClass={(open) => ghostClass('sm', open)}
-            trigger={() => <Pencil class="size-3.5" />}
-          />
-          <GhostButton size="sm" onClick={() => toggleArchived(s()).catch((e: Error) => showError("Couldn't change it", e.message))} title={s().archived ? 'Unarchive' : 'Archive'}>
-            <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
-              <ArchiveRestore class="size-3.5" />
-            </Show>
-          </GhostButton>
+          {/* A draft has no transcript to rename or archive: it's thrown away instead. */}
+          <Show
+            when={!s().unstarted}
+            fallback={
+              <GhostButton size="sm" onClick={(e) => discard(e.currentTarget)} title="Discard draft">
+                <Trash2 class="size-3.5" />
+              </GhostButton>
+            }
+          >
+            <RenameChat
+              session={s()}
+              title="Rename"
+              onOpenChange={props.onOpenChange}
+              triggerClass={(open) => ghostClass('sm', open)}
+              trigger={() => <Pencil class="size-3.5" />}
+            />
+            <GhostButton size="sm" onClick={() => toggleArchived(s()).catch((e: Error) => showError("Couldn't change it", e.message))} title={s().archived ? 'Unarchive' : 'Archive'}>
+              <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
+                <ArchiveRestore class="size-3.5" />
+              </Show>
+            </GhostButton>
+          </Show>
         </div>
       </div>
       <NestedRows session={s()} current={props.current} onScreen={props.onScreen} />

@@ -27,6 +27,11 @@ export function ChatSummary(props: {
         <ChatDot running={s().running} attention={attention()[s().id]} />
       </div>
       <div class={`mt-0.5 flex gap-1.5 text-meta text-fg-3 tabular-nums ${props.metaClass ?? ''}`}>
+        <Show when={s().draft}>
+          <span class="shrink-0 text-accent" title={s().unstarted ? 'Not sent yet' : 'Something’s typed in it and not sent'}>
+            Draft
+          </span>
+        </Show>
         <span class="truncate">{s().cwd && folderLabel(s().cwd!)}</span>
         <Show when={onMachine(s().machine)}>{(name) => <MachineName machine={s().machine} name={name()} />}</Show>
         <Show when={props.card}>{(c) => <span class="shrink-0">#{c().id}</span>}</Show>

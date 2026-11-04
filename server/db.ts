@@ -252,6 +252,10 @@ const MIGRATIONS = [
      source_id TEXT NOT NULL,
      created_at INTEGER NOT NULL
    );`,
+  // Where a chat that hasn't started will run, kept with its draft: the runner, the folder there, and whether in a new worktree.
+  `ALTER TABLE session_drafts ADD COLUMN machine TEXT;
+   ALTER TABLE session_drafts ADD COLUMN cwd TEXT;
+   ALTER TABLE session_drafts ADD COLUMN worktree INTEGER NOT NULL DEFAULT 0;`,
 ]
 
 /** Who made a change. There are no users yet, so for now it's where the change came from. */

@@ -1,32 +1,21 @@
 import { createEffect, createMemo, createRoot, createSignal, untrack } from 'solid-js'
-import type { SessionSummary } from '../shared/protocol.ts'
+import type { SessionSummary, StartAt } from '../shared/protocol.ts'
+import { socket } from './api.ts'
 import { isScratch, scratchDir } from './folders.ts'
 import { LOCAL, machineOf, machines } from './machines.ts'
-import { linkSession } from './stores/cards.ts'
+import { cardOf, linkSession } from './stores/cards.ts'
 import { config } from './stores/config.ts'
 import { sessionById, sessions, sessionsLoaded } from './stores/sessions.ts'
 
 /**
- * Blank chats: ones with an id but no first message yet, so the server doesn't know them. Home is one; each card
- * can have one too, kept until its first message so leaving it doesn't lose what's typed there. Where each will
- * run (runner, folder, whether in a new worktree) is picked here, and kept in this browser until it starts.
+ * New chats: ones with an id but no first message yet, which the hub knows only by their drafts. Home has one, and
+ * each card can too, which "New chat" there goes back to while nothing's typed in it. Once something is, it's a
+ * draft, listed with the chats, and the next "New chat" there is a fresh one. Where each will run is kept with its
+ * draft once it's picked or typed in; until then it's the defaults here.
  */
 
-const HOME_KEY = 'badger.homeId'
-const BLANKS_KEY = 'badger.blankChats'
-const DRAFTS_KEY = 'badger.draftCwds'
-const MACHINES_KEY = 'badger.draftMachines'
+const FRESH_KEY = 'badger.newChats'
 const LAST_MACHINE_KEY = 'badger.lastMachine'
-const WORKTREES_KEY = 'badger.draftWorktrees'
-
-/** A JSON record from localStorage, or an empty one. */
-function loadRecord<T>(key: string): T {
-  try {
-    return JSON.parse(localStorage.getItem(key) ?? '{}')
-  } catch {
-    return {} as T
-  }
-}
 
 /** crypto.randomUUID needs a secure context; fall back for plain-http hosts. */
 function uuid(): string {
@@ -38,27 +27,34 @@ function uuid(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-const TEMP = /^\/(private\/)?(tmp|var\/folders)\//
+/** Each place's new chat, by its card's id or 'home', from this browser's last visit. */
+function loadFresh(): Record<string, string> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(FRESH_KEY) ?? 'null')
+    if (saved) return saved
+    // From before drafts kept where they run: home's and the cards' new chats carry over; where each was to run doesn't.
+    const fresh = { ...JSON.parse(localStorage.getItem('badger.blankChats') ?? '{}'), home: localStorage.getItem('badger.homeId') ?? uuid() }
+    for (const old of ['badger.blankChats', 'badger.homeId', 'badger.draftCwds', 'badger.draftMachines', 'badger.draftWorktrees']) localStorage.removeItem(old)
+    return fresh
+  } catch {
+    return { home: uuid() }
+  }
+}
 
-/** The folder each blank chat will start in. */
-const [cwds, setCwds] = createSignal<Record<string, string>>(loadRecord(DRAFTS_KEY))
-/** The runner each blank chat will run on, picked along with its folder. */
-const [runners, setRunners] = createSignal<Record<string, string>>(loadRecord(MACHINES_KEY))
+const [fresh, setFresh] = createSignal<Record<string, string>>(loadFresh())
 /** The runner this browser last picked for a chat, which new ones default to while it's online. */
 const [lastMachine, setLastMachine] = createSignal(localStorage.getItem(LAST_MACHINE_KEY) ?? undefined)
-/** Blank chats that should start with "In a worktree" ticked, e.g. a card whose work is already in one. */
-const [worktrees, setWorktrees] = createSignal<Record<string, boolean>>(loadRecord(WORKTREES_KEY))
-/** Each card's blank chat. */
-const [blanks, setBlanks] = createSignal<Record<number, string>>(loadRecord(BLANKS_KEY))
-// Home gets a real URL once its first message is sent. Its id is kept until then so a draft typed there survives reloads.
-const [homeId, setHomeId] = createSignal(localStorage.getItem(HOME_KEY) ?? uuid())
-/** The blank chat home shows. */
-export { homeId }
+/** Where each new chat with nothing saved will run, settled the first time it's asked, so it doesn't move while it waits. */
+const pinned = new Map<string, StartAt>()
+
+/** The new chat home shows. */
+export const homeId = () => fresh().home
 
 /** The most recent chat a new one could start where it ran: temp dirs and ones that are gone (removed worktrees) don't count. */
+const TEMP = /^\/(private\/)?(tmp|var\/folders)\//
 const latestChat = (machine?: string) =>
   sessions()
-    .filter((s) => s.cwd && !s.gone && (isScratch(s.cwd) || !TEMP.test(s.cwd)) && (!machine || (s.machine || LOCAL) === machine))
+    .filter((s) => s.cwd && !s.unstarted && !s.gone && (isScratch(s.cwd) || !TEMP.test(s.cwd)) && (!machine || (s.machine || LOCAL) === machine))
     .reduce<SessionSummary | undefined>((a, s) => (!a || s.lastModified > a.lastModified ? s : a), undefined)
 
 const { defaultMachine, defaultCwd } = createRoot(() => {
@@ -75,85 +71,66 @@ const { defaultMachine, defaultCwd } = createRoot(() => {
     return latestChat(m)?.cwd ?? scratchDir(m) ?? (m === LOCAL ? config()?.defaultCwd : machineOf(m)?.workspaceDir)
   })
 
+  createEffect(() => localStorage.setItem(FRESH_KEY, JSON.stringify(fresh())))
   createEffect(() => lastMachine() && localStorage.setItem(LAST_MACHINE_KEY, lastMachine()!))
-  createEffect(() => localStorage.setItem(HOME_KEY, homeId()))
-  // Only blank chats' runner, folder and worktree picks are kept; once a chat starts, the server has them.
+  // New chats that have started, here or in another tab, make way for fresh ones.
   createEffect(() => {
-    const blank = new Set([homeId(), ...Object.values(blanks())])
-    const keep = <T>(all: Record<string, T>) => Object.fromEntries(Object.entries(all).filter(([id]) => blank.has(id)))
-    localStorage.setItem(BLANKS_KEY, JSON.stringify(blanks()))
-    localStorage.setItem(DRAFTS_KEY, JSON.stringify(keep(cwds())))
-    localStorage.setItem(MACHINES_KEY, JSON.stringify(keep(runners())))
-    localStorage.setItem(WORKTREES_KEY, JSON.stringify(keep(worktrees())))
-  })
-
-  // Home's defaults are pinned, so activity elsewhere doesn't move the folder while you type.
-  createEffect(() => {
-    const id = homeId()
-    // Not until the runners are known, so the one last picked isn't passed over for seeming offline; and a runner
-    // that's only just connected may not have said where its folders are yet.
-    if (!sessionsLoaded() || !machines().length || untrack(cwds)[id]) return
-    const cwd = defaultCwd()
-    if (!cwd) return
-    setCwds((d) => ({ ...d, [id]: cwd }))
-    setRunners((d) => ({ ...d, [id]: untrack(defaultMachine) }))
-  })
-
-  // Blank chats that have started, here or in another tab, make way for fresh ones.
-  createEffect(() => {
-    const started = new Set(sessions().map((s) => s.id))
-    if (started.has(untrack(homeId))) setHomeId(uuid())
-    const left = Object.entries(untrack(blanks)).filter(([, id]) => !started.has(id))
-    if (left.length < Object.keys(untrack(blanks)).length) setBlanks(Object.fromEntries(left))
+    const started = new Set(sessions().flatMap((s) => (s.unstarted ? [] : [s.id])))
+    for (const id of Object.values(untrack(fresh))) if (started.has(id)) chatStarted(id)
   })
 
   return { defaultMachine, defaultCwd }
 })
 
-/** Where a blank chat will run, as picked so far. A folder picked without a runner was picked before there were any but the hub's. */
-export const draftFor = (id: string) => ({
-  // A chat that has started is wherever the list says, so it opens beside its own panels, not a guess at them.
-  cwd: cwds()[id] ?? (sessionsLoaded() && !sessionById(id) ? defaultCwd() : undefined),
-  machine: runners()[id] ?? (cwds()[id] ? LOCAL : defaultMachine()),
-  worktree: worktrees()[id],
-})
-
-const pin = (id: string, cwd: string | undefined, machine: string) => {
-  if (cwd) setCwds((d) => ({ ...d, [id]: cwd }))
-  setRunners((d) => ({ ...d, [id]: machine }))
+/**
+ * Where a new chat runs if nothing's saved with its draft: the defaults, as they were the first time it was asked.
+ * Undefined until they're known: the runners, so the one last picked isn't passed over for seeming offline, and a
+ * runner that's only just connected may not have said where its folders are yet.
+ */
+export function defaultStart(id: string): StartAt | undefined {
+  const at = pinned.get(id)
+  if (at) return at
+  if (!sessionsLoaded() || !machines().length) return undefined
+  const cwd = defaultCwd()
+  if (!cwd) return undefined
+  const start = { machine: untrack(defaultMachine), cwd }
+  pinned.set(id, start)
+  return start
 }
 
-/** The user picked where a blank chat runs. The runner is remembered for the next new chat too. */
-export function pick(id: string, cwd: string, machine: string) {
-  pin(id, cwd, machine)
-  setLastMachine(machine)
-}
-
-export const pickWorktree = (id: string, on: boolean) => setWorktrees((w) => ({ ...w, [id]: on }))
+/** The user picked a runner for a chat: new ones default to it from now on. */
+export const rememberMachine = (machine: string) => setLastMachine(machine)
 
 /**
- * A blank chat to start, from somewhere if given, else from the defaults; returns its id. A card's is the blank one
- * it has if it has one, so a draft left there is still there; otherwise the new one goes on the card.
+ * A new chat on a card, or home's: the one there if nothing's typed in it, else a fresh one, starting `from` where
+ * given. A card's goes on the card.
  */
-export function newBlank(from: { cwd: string; machine: string; worktree: boolean } | undefined, cardId?: number): string {
-  const kept = cardId === undefined ? undefined : untrack(blanks)[cardId]
-  if (kept) return kept
-  const id = uuid()
-  untrack(() => pin(id, from?.cwd ?? defaultCwd(), from?.machine ?? defaultMachine()))
-  if (from?.worktree) pickWorktree(id, true)
-  if (cardId !== undefined) {
-    setBlanks((b) => ({ ...b, [cardId]: id }))
-    void linkSession(cardId, id)
+export function newChat(card?: number, from?: StartAt): string {
+  const place = card ?? 'home'
+  const kept = untrack(fresh)[place]
+  // A new chat with something typed is listed: it's a draft now, and stays as it is. Until the list is in, that
+  // can't be known. A card's that was discarded has come off the card.
+  if (kept && sessionsLoaded() && !sessionById(kept) && (card === undefined || cardOf(kept)?.id === card)) {
+    // What it has saved comes first; this is for when it has nothing, e.g. after a week left untouched.
+    if (from && !pinned.has(kept)) pinned.set(kept, from)
+    return kept
   }
+  const id = uuid()
+  setFresh((f) => ({ ...f, [place]: id }))
+  if (from) {
+    pinned.set(id, from)
+    // Kept with its draft, so it's still there after a reload, or in another tab.
+    socket.send({ type: 'draft', sessionId: id, start: from })
+  }
+  if (card !== undefined) void linkSession(card, id)
   return id
 }
 
-/**
- * The home chat's first message went out: it keeps where it was going to run, and home gets a fresh blank chat.
- * Called once the page is on the chat's own URL, so it isn't remounted as home moves on.
- */
-export function promoteHome(id: string) {
-  const { cwd, machine } = draftFor(id)
-  pin(id, cwd, machine)
-  setHomeId(uuid())
+/** A new chat's first message went out, so wherever it was the new chat, there's a fresh one. */
+export function chatStarted(id: string) {
+  pinned.delete(id)
+  setFresh((f) => {
+    const left = Object.fromEntries(Object.entries(f).filter(([, kept]) => kept !== id))
+    return { ...left, home: left.home ?? uuid() }
+  })
 }

@@ -38,10 +38,10 @@ export function cardWorktreeName(card: { id: number; title: string }): string {
 
 /** Where a new chat should start: the repo of the most recent of these chats that ran in one, on its machine, and whether that was a worktree. */
 export function lastWorkedIn(
-  sessions: { cwd?: string; machine?: string; gone?: boolean; lastModified: number }[],
+  sessions: { cwd?: string; machine?: string; gone?: boolean; unstarted?: boolean; lastModified: number }[],
 ): { cwd: string; machine: string; worktree: boolean } | undefined {
   const latest = sessions
-    .filter((s) => s.cwd && !s.gone && !isScratch(s.cwd))
+    .filter((s) => s.cwd && !s.gone && !s.unstarted && !isScratch(s.cwd))
     .reduce<(typeof sessions)[number] | undefined>((a, s) => (!a || s.lastModified > a.lastModified ? s : a), undefined)
   if (!latest?.cwd) return undefined
   const wt = worktreeOf(latest.cwd)

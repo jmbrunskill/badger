@@ -94,7 +94,8 @@ export function ChatHeader(props: {
   const folder = () => {
     const dir = props.cwd
     if (!dir) return ''
-    return basename(worktreeOf(dir)?.repo ?? dir)
+    // A worktree's name says which of the repo's checkouts this is; the repo alone doesn't.
+    return worktreeOf(dir)?.name ?? basename(dir)
   }
 
   let gitMenu!: HTMLDivElement
@@ -246,7 +247,7 @@ export function ChatHeader(props: {
         )}
       </Show>
       {/* With a branch beside it, the next to go. */}
-      <span class={`shrink-0 text-fg-2 ${props.git ? 'hidden @2xl:block' : ''}`}>{folder()}</span>
+      <span title={props.cwd} class={`shrink-0 text-fg-2 ${props.git ? 'hidden @2xl:block' : ''}`}>{folder()}</span>
       <Show when={props.git}>
         {(g) => (
           <>

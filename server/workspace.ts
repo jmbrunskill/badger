@@ -195,6 +195,9 @@ export async function gitPull(path: string): Promise<void> {
   await gitRemote(path, 'pull', '--ff-only')
 }
 
+/** Whether a branch's worktree path, from `%(worktreepath)`, is a checkout other than `top`. */
+const outElsewhere = (where: string | undefined, top: string) => !!where && resolve(where) !== resolve(top)
+
 /** Every branch, local and remote, less a remote one with a local branch of its name. */
 export async function branchChoices(path: string): Promise<BranchChoices> {
   const [branch, top, refs] = await Promise.all([
@@ -211,7 +214,7 @@ export async function branchChoices(path: string): Promise<BranchChoices> {
   for (const [ref, where] of rows) {
     if (ref.startsWith('refs/heads/')) {
       const name = ref.slice('refs/heads/'.length)
-      branches.push({ name, ...(where && resolve(where) !== resolve(top) && { elsewhere: where }) })
+      branches.push({ name, ...(outElsewhere(where, top) && { elsewhere: where }) })
     } else {
       const name = ref.slice('refs/remotes/'.length)
       // A remote's HEAD, and one already here under its own name.
@@ -223,17 +226,26 @@ export async function branchChoices(path: string): Promise<BranchChoices> {
 }
 
 /**
- * Switch to a branch, or with `create` to a new one from here. One only on a remote becomes a local branch tracking it.
+ * Switch to a branch, or with `create` to a new one from here. One only on a remote becomes a local branch tracking it,
+ * and one out in another checkout is checked out detached at its commit, as git won't have one branch out in two.
  * Git refuses rather than lose uncommitted changes, and says so in its own words. Leaving a worktree's own branch,
  * the one Claude Code made it with, deletes that if it has nothing the new one doesn't.
  */
 export async function gitSwitch(path: string, to: string, create = false): Promise<void> {
-  const [from, top] = await Promise.all([git(path, 'branch', '--show-current'), git(path, 'rev-parse', '--show-toplevel')])
-  const has = (ref: string) => git(path, 'show-ref', '--verify', '--quiet', ref).then(() => true, () => false)
+  const [from, top, local] = await Promise.all([
+    git(path, 'branch', '--show-current'),
+    git(path, 'rev-parse', '--show-toplevel'),
+    // The branch and the checkout it's out in, if any; nothing if there's no such branch.
+    git(path, 'for-each-ref', '--format=%(refname)%00%(worktreepath)', `refs/heads/${to}`),
+  ])
+  const [ref, where] = local.split('\0')
   // gitRemote for git's own words when it refuses; nothing here touches the network.
   if (create) await gitRemote(path, 'switch', '--create', to)
-  else if (await has(`refs/heads/${to}`)) await gitRemote(path, 'switch', to)
-  else if (await has(`refs/remotes/${to}`)) await gitRemote(path, 'switch', '--track', to)
+  // Detached by its whole ref, which a tag of the same name would otherwise win over. Never off this checkout's own branch.
+  else if (ref === `refs/heads/${to}` && to !== from && outElsewhere(where, top)) await gitRemote(path, 'switch', '--detach', ref)
+  else if (ref === `refs/heads/${to}`) await gitRemote(path, 'switch', to)
+  else if (await git(path, 'show-ref', '--verify', '--quiet', `refs/remotes/${to}`).then(() => true, () => false))
+    await gitRemote(path, 'switch', '--track', to)
   else throw new Error(`There's no branch called ${to}`)
   const own = WORKTREE_PATH.exec(resolve(top))?.[2]
   if (own && from === `worktree-${own}`) await git(path, 'branch', '-d', from).catch(() => {})

@@ -4,6 +4,7 @@ import { PathLink } from './PathLink.tsx'
 import { highlightWhenSeen, highlighted, languageOf } from '../highlight.ts'
 import { Check, ChevronRight, CircleAlert, Loader2, Shield, Webhook } from '../icons'
 import type { Task } from '../tasks.ts'
+import { terminalLabel, terminals } from '../terminals.ts'
 import { useChecking } from '../useChat.ts'
 import { viewImages } from './ImageViewer.tsx'
 import { Markdown } from './Markdown.tsx'
@@ -84,6 +85,14 @@ export function toolSummary(name: string, input: Input, cwd?: string): string {
       return str(input.status)
     case 'mcp__badger__merge_worktree':
       return ''
+    case 'mcp__terminals__read_terminal':
+    case 'mcp__terminals__restart_terminal':
+    case 'mcp__terminals__stop_terminal':
+    case 'mcp__terminals__send_input': {
+      // By what it's called, as the terminals panel shows it; a closed one only has its id left.
+      const t = terminals().find((t) => t.id === input.id)
+      return [t ? terminalLabel(t) : str(input.id), input.text ? JSON.stringify(input.text) : ''].filter(Boolean).join(' ')
+    }
     case 'Bash':
       return str(input.description) || str(input.command)
     case 'Read':

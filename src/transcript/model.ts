@@ -1,5 +1,6 @@
 import { parseCardContext, type CardContext } from '../../shared/cardContext.ts'
 import { splitMoveNote, splitSideNote, type Move } from '../../shared/forkNote.ts'
+import { splitGitNote } from '../../shared/gitNote.ts'
 import { unwrapPaste } from '../../shared/pastes.ts'
 import { sentToSubagentBy } from '../../shared/toSubagent.ts'
 import type { ImageAttachment, WireMessage } from '../../shared/protocol.ts'
@@ -42,6 +43,8 @@ export type Chip =
   | { type: 'skill'; text: string }
   | { type: 'instructions'; files: { path: string; type?: string; content: string }[] }
   | { type: 'hook'; hook?: string; text: string }
+  /** What changed in git while the chat sat idle, e.g. the user pushed. */
+  | { type: 'git'; text: string }
   | { type: 'hook_error'; hook?: string; command?: string; error: string }
 
 /** A stretch of Claude's work folded into one row, in result-only mode. */
@@ -116,10 +119,12 @@ export function messageItems(m: WireMessage): Item[] {
   const anchor = typeof m.anchor === 'string' ? m.anchor : undefined
   if (m.type === 'hook_context') {
     // Badger's own: the card, where a fork moved to, and that a side chat is one, which its panel says already.
-    const { move, rest } = splitMoveNote(splitSideNote(String(m.text ?? '')).rest)
+    const { git, rest: badger } = splitGitNote(String(m.text ?? ''))
+    const { move, rest } = splitMoveNote(splitSideNote(badger).rest)
     const context = rest ? parseCardContext(rest) : undefined
-    if (context || move) return [{ kind: 'card', context, move }]
-    return rest.trim() ? [{ kind: 'chip', anchor, chip: { type: 'hook', hook: str(m.hook), text: rest } }] : []
+    const gitChip: Item[] = git ? [{ kind: 'chip', anchor, chip: { type: 'git', text: git } }] : []
+    if (context || move) return [{ kind: 'card', context, move }, ...gitChip]
+    return [...(rest.trim() ? [{ kind: 'chip' as const, anchor, chip: { type: 'hook' as const, hook: str(m.hook), text: rest } }] : []), ...gitChip]
   }
   if (m.type === 'hook_error') return [{ kind: 'chip', anchor, chip: { type: 'hook_error', hook: str(m.hook), command: str(m.command), error: String(m.error ?? '') } }]
   if (m.type === 'instructions' && Array.isArray(m.files) && m.files.length) return [{ kind: 'chip', anchor, chip: { type: 'instructions', files: m.files } }]

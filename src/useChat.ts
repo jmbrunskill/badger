@@ -1,10 +1,25 @@
 import { createContext, createMemo, mapArray, onCleanup, useContext } from 'solid-js'
 import { createStore, produce } from 'solid-js/store'
-import type { BackgroundTask, ClientEvent, ContextUsage, DraftAttachments, PendingPermission, PermissionMode, QueuedMessage, ServerEvent, WireMessage } from '../shared/protocol.ts'
+import {
+  NO_DRAFT,
+  changeDraft,
+  type BackgroundTask,
+  type ClientEvent,
+  type ContextUsage,
+  type Draft,
+  type DraftAttachments,
+  type PendingPermission,
+  type PermissionMode,
+  type QueuedMessage,
+  type ServerEvent,
+  type StartAt,
+  type WireMessage,
+} from '../shared/protocol.ts'
 import { sentToSubagentBy, toSubagent } from '../shared/toSubagent.ts'
 import { socket } from './api.ts'
 
-export const NO_ATTACHMENTS: DraftAttachments = { pastes: [], images: [] }
+/** What the composer changes of a draft: what's typed, saved after a pause in typing, or what's attached, saved at once. */
+export type DraftEdit = { text?: string; attachments?: DraftAttachments }
 
 /** The block currently streaming in, before its full assistant message lands. */
 export interface Partial {
@@ -16,10 +31,8 @@ export interface Partial {
 
 export interface ChatState {
   loaded: boolean
-  /** Unsent text, as last saved by any tab on this chat. */
-  draft: string
-  /** And its attachments, saved as soon as they change. */
-  draftAttachments: DraftAttachments
+  /** What's in its composer and not sent, as last saved by any tab on it. */
+  draft: Draft
   messages: WireMessage[]
   partial: Partial | null
   running: boolean
@@ -64,7 +77,6 @@ function apply(state: ChatState, event: ServerEvent, stream: Stream): void {
     case 'snapshot':
       state.loaded = true
       state.draft = event.draft
-      state.draftAttachments = event.draftAttachments
       state.messages = event.messages
       state.running = event.running
       state.makingWorktree = !!event.makingWorktree
@@ -85,10 +97,11 @@ function apply(state: ChatState, event: ServerEvent, stream: Stream): void {
     case 'background':
       state.background = event.tasks
       break
-    case 'draft':
-      if (event.attachments) state.draftAttachments = event.attachments
-      if (event.text !== undefined) state.draft = event.text
+    case 'draft': {
+      const { type, sessionId, ...change } = event
+      state.draft = changeDraft(state.draft, change)
       break
+    }
     case 'queued':
       state.queued = event.messages
       break
@@ -189,11 +202,13 @@ export const chatCommands = (sessionId: string) => ({
 /** A message going out: what's typed and attached, and for a chat that hasn't started, where and how it runs. */
 export type Outgoing = Omit<Extract<ClientEvent, { type: 'send' }>, 'type' | 'sessionId'>
 
-/** Subscribes to one session for the lifetime of the calling component. Returns its state and what can be asked of it. */
-export function createChat(sessionId: string) {
+/**
+ * Subscribes to one session for the lifetime of the calling component. Returns its state and what can be asked of it.
+ * While it hasn't started, `start` says where it will run, which is kept with its draft.
+ */
+export function createChat(sessionId: string, start?: () => StartAt | undefined) {
   const [state, setState] = createStore<ChatState>({
-    draft: '',
-    draftAttachments: NO_ATTACHMENTS,
+    draft: NO_DRAFT,
     loaded: false,
     messages: [],
     partial: null,
@@ -220,35 +235,34 @@ export function createChat(sessionId: string) {
     socket.send({ type: 'unsubscribe', sessionId })
   })
 
+  /** Saves parts of the draft on the server, so it survives leaving the chat or reloading, and every tab on it shows the same. */
+  const save = (change: DraftEdit & { start?: StartAt }) => {
+    // Replaced, not merged: setState('draft', change) would write into the object there, which can be NO_DRAFT.
+    setState({ draft: changeDraft(state.draft, change) })
+    socket.send({ type: 'draft', sessionId, ...change })
+  }
+
   return {
     state,
     ...chatCommands(sessionId),
     clearError: () => setState('error', null),
     send: (message: Outgoing) => socket.send({ type: 'send', sessionId, ...message }),
-    /** The draft went out as a message; the server clears its copy when the message arrives. */
-    clearDraft: () => setState({ draft: '', draftAttachments: NO_ATTACHMENTS }),
-    /**
-     * Saves unsent text on the server, so it survives leaving the chat or reloading, and every tab on this chat
-     * shows the same draft.
-     */
-    saveDraft: (text: string) => {
-      setState('draft', text)
-      socket.send({ type: 'draft', sessionId, text })
+    /** The draft went out as a message; the server clears its copy when the message arrives. Where it was to start stays until the chat says where it did. */
+    clearDraft: () => setState({ draft: { ...NO_DRAFT, start: state.draft.start } }),
+    /** A chat that hasn't started keeps where it will run with what's typed, so that stays put while it waits. */
+    editDraft: (edit: DraftEdit) => {
+      const at = start?.()
+      save(at ? { ...edit, start: at } : edit)
     },
-    /** Saves the draft's attachments at once, unlike typing: they change rarely and can be big. */
-    attach: (change: (a: DraftAttachments) => DraftAttachments) => {
-      const next = change(state.draftAttachments)
-      // Replaced, not merged: setState('draftAttachments', next) would write into the object there, which can be NO_ATTACHMENTS.
-      setState({ draftAttachments: next })
-      socket.send({ type: 'draft', sessionId, attachments: next })
-    },
+    /** Picks where a chat that hasn't started will run. */
+    startAt: (at: StartAt) => save({ start: at }),
   }
 }
 
 export type Chat = ReturnType<typeof createChat>
 
 /** What's typed to subagents and not sent, by chat and Agent call. Only in this tab: a subagent's chat is its parent's. */
-const [agentDrafts, setAgentDrafts] = createStore<Record<string, { text: string; attachments: DraftAttachments }>>({})
+const [agentDrafts, setAgentDrafts] = createStore<Record<string, Draft>>({})
 
 /**
  * A subagent as a chat of its own, inside the chat running it: it reads that chat's state, its own conversation
@@ -261,10 +275,9 @@ export function agentChat(
   agent: { toolUseId: string; id: () => string | undefined; description: () => string; running: () => boolean; stop: () => void },
 ): Chat {
   const key = `${sessionId}:${agent.toolUseId}`
-  const draft = () => agentDrafts[key] ?? { text: '', attachments: NO_ATTACHMENTS }
+  const draft = () => agentDrafts[key] ?? NO_DRAFT
   const own: { [K in keyof ChatState]?: () => unknown } = {
-    draft: () => draft().text,
-    draftAttachments: () => draft().attachments,
+    draft,
     running: agent.running,
     partial: () => null,
     makingWorktree: () => false,
@@ -294,8 +307,8 @@ export function agentChat(
       if (id && text) parent.send({ text: toSubagent({ id, description: agent.description() }, text) })
     },
     clearDraft: () => setAgentDrafts(key, undefined!),
-    saveDraft: (text: string) => setAgentDrafts(key, { text, attachments: draft().attachments }),
-    attach: (change: (a: DraftAttachments) => DraftAttachments) => setAgentDrafts(key, { text: draft().text, attachments: change(draft().attachments) }),
+    editDraft: (edit: DraftEdit) => setAgentDrafts(key, { ...draft(), ...edit }),
+    startAt: () => {},
   }
 }
 

@@ -3,7 +3,7 @@ import { PanelLeft, Plus } from './icons'
 import { descendants } from '../shared/cardTree.ts'
 import { socket } from './api.ts'
 import { attention, looking, needsYou, notify, onAttention } from './attention.ts'
-import { draftFor, homeId, newBlank, pick, pickWorktree, promoteHome } from './drafts.ts'
+import { chatStarted, homeId, newChat as newChatIn } from './drafts.ts'
 import { lastWorkedIn } from './folders.ts'
 import { focus } from './focus.ts'
 import { navigate, replace, route } from './router.tsx'
@@ -65,7 +65,7 @@ export function App() {
     addEventListener('pointerup', up)
   }
 
-  /** The chat on screen: the one routed to, or home's blank one. */
+  /** The chat on screen: the one routed to, or home's new one. */
   const current = () => {
     const r = route()
     return r.kind === 'chat' ? r.id : r.kind === 'home' ? homeId() : null
@@ -84,12 +84,15 @@ export function App() {
     if (id && looking() && attention()[id] === 'unread') socket.send({ type: 'seen', sessionId: id })
   })
 
-  const newChat = (from: { cwd: string; machine: string; worktree: boolean } | undefined, cardId?: number) =>
-    navigate({ kind: 'chat', id: newBlank(from, cardId) })
-  /** In a project, a new chat goes on the project's card and starts where its work last happened; otherwise it's the blank home chat. */
+  const newChat = (from: { cwd: string; machine: string; worktree: boolean } | undefined, cardId: number) =>
+    navigate({ kind: 'chat', id: newChatIn(cardId, from) })
+  /** In a project, a new chat goes on the project's card and starts where its work last happened; otherwise it's home's. */
   const newHomeChat = () => {
     const f = focus()
-    if (!f) return navigate({ kind: 'home' })
+    if (!f) {
+      newChatIn()
+      return navigate({ kind: 'home' })
+    }
     const ids = [f, ...descendants(cards(), f.id)].flatMap((c) => c.sessionIds)
     const from = lastWorkedIn(sessions().filter((s) => ids.includes(s.id)))
     newChat(from && { ...from, worktree: false }, f.id)
@@ -201,16 +204,10 @@ export function App() {
               return (
                 <Chat
                   sessionId={id}
-                  draftCwd={draftFor(id).cwd}
-                  draftMachine={sessionById(id)?.machine ?? draftFor(id).machine}
-                  worktree={draftFor(id).worktree}
-                  onPickCwd={(cwd, machine) => pick(id, cwd, machine)}
-                  onPickWorktree={(on) => pickWorktree(id, on)}
                   onStart={() => {
-                    if (!home()) return
                     // Its own URL first, so the chat isn't remounted when home moves on to a fresh one.
-                    replace({ kind: 'chat', id })
-                    promoteHome(id)
+                    if (home()) replace({ kind: 'chat', id })
+                    chatStarted(id)
                   }}
                   bar={mobileBar()}
                 />

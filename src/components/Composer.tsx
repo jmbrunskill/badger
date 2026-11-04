@@ -65,8 +65,10 @@ export function Composer(props: {
   above?: () => HTMLElement | undefined
 }) {
   const state = props.chat.state
-  const [text, setText] = createSignal(state.draft)
-  const attached = () => state.draftAttachments
+  const [text, setText] = createSignal(state.draft.text)
+  const attached = () => state.draft.attachments
+  /** Changes what's attached, saved at once, unlike typing: attachments change rarely and can be big. */
+  const attach = (change: (a: DraftAttachments) => DraftAttachments) => props.chat.editDraft({ attachments: change(attached()) })
   const pastes = () => attached().pastes
   const images = () => attached().images
   const hasInput = () => !!text().trim() || pastes().length > 0 || images().length > 0
@@ -80,7 +82,7 @@ export function Composer(props: {
     clearTimeout(saveTimer)
     if (!unsaved) return
     unsaved = false
-    props.chat.saveDraft(text())
+    props.chat.editDraft({ text: text() })
   }
   const edit = (value: string) => {
     setText(value)
@@ -96,7 +98,7 @@ export function Composer(props: {
   // The draft as saved, here or by another tab; what's typed here and not yet saved stays.
   createEffect(
     on(
-      () => state.draft,
+      () => state.draft.text,
       (draft) => {
         if (unsaved) return
         setText(draft)
@@ -137,7 +139,7 @@ export function Composer(props: {
   /** Adds the images among these files, and says whether there were any. */
   const addImages = (files: Iterable<File>) => {
     const found = [...files].filter((f) => f.type.startsWith('image/'))
-    for (const f of found) void readImage(f).then((image) => image && props.chat.attach((a) => ({ ...a, images: [...a.images, image] })))
+    for (const f of found) void readImage(f).then((image) => image && attach((a) => ({ ...a, images: [...a.images, image] })))
     return found.length > 0
   }
   /**
@@ -200,8 +202,8 @@ export function Composer(props: {
           pastes={pastes()}
           images={images()}
           card={props.pendingCard}
-          onRemovePaste={(i) => props.chat.attach((a) => ({ ...a, pastes: a.pastes.filter((_, j) => j !== i) }))}
-          onRemoveImage={(i) => props.chat.attach((a) => ({ ...a, images: a.images.filter((_, j) => j !== i) }))}
+          onRemovePaste={(i) => attach((a) => ({ ...a, pastes: a.pastes.filter((_, j) => j !== i) }))}
+          onRemoveImage={(i) => attach((a) => ({ ...a, images: a.images.filter((_, j) => j !== i) }))}
           class="px-3 pt-3"
         />
       </Show>
@@ -222,7 +224,7 @@ export function Composer(props: {
           const pasted = e.clipboardData?.getData('text/plain')
           if (!pasted) return !!e.clipboardData && addImages(e.clipboardData.files)
           if (!isLongPaste(pasted)) return false
-          props.chat.attach((a) => ({ ...a, pastes: [...a.pastes, pasted] }))
+          attach((a) => ({ ...a, pastes: [...a.pastes, pasted] }))
           return true
         }}
         onKeyDown={(e) => {

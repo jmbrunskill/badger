@@ -8,6 +8,7 @@ import { diffView, openFile, openTerminal, openView, planView, setFileMode, view
 import { OpenFile, useOpenFile } from '../fileLinks.ts'
 import { FileView } from './FileView.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
+import { REPLIES_LEAD, ReplyComments, commentsMessage, createReplyComments, inOrder, offsetsIn } from '../replyComments.tsx'
 import { sideChatsOf, startSideChat } from '../btw.ts'
 import { LOCAL, isOnline, isRemoved, knownName, machineName, onMachine } from '../machines.ts'
 import { lastModel, modelChoices, modelName, modelValue, models, setLastModel, type ModelChoice } from '../models.ts'
@@ -68,6 +69,13 @@ export function Chat(props: {
   /** The chat as the sidebar lists it, for the header's title, move, rename and archive. Absent until it's listed. */
   const session = () => sessionById(props.sessionId)
   let composer: ComposerControls | undefined
+  /** Comments on Claude's replies, kept with the draft until the next message; a subagent's chat has no draft on the server to keep them. */
+  const comments = props.host
+    ? undefined
+    : createReplyComments({
+        comments: () => state.draftAttachments.comments ?? [],
+        attach: (change) => chat.attach((a) => ({ ...a, comments: change(a.comments ?? []) })),
+      })
 
   const [started, setStarted] = createSignal(false)
   const [mode, setMode] = createSignal<PermissionMode>('auto')
@@ -243,7 +251,9 @@ export function Chat(props: {
     ),
     planWaiting: () => !!planPrompt(),
     renderPlan: (onReady) => (
-      <PlanPane sessionId={props.sessionId} permission={planPrompt()} past={latestPlan(index())} onReady={onReady} />
+      <ReplyComments.Provider value={comments}>
+        <PlanPane sessionId={props.sessionId} permission={planPrompt()} past={latestPlan(index())} onReady={onReady} />
+      </ReplyComments.Provider>
     ),
     attachment: (v) => attachmentOf(index(), v.prompt, v.part),
     renderAttachment: (v, onReady) => <AttachmentPane index={index} prompt={v.prompt} part={v.part} onReady={onReady} />,
@@ -296,11 +306,15 @@ export function Chat(props: {
 
   const send = (text: string, attachments: DraftAttachments = NO_ATTACHMENTS) => {
     if (state.gone || stranded()) return
+    const { comments: replies, ...attached } = attachments
+    // A command can't go after comments, which would make it text: they wait for the next message, put back once the composer's cleared.
+    const command = /^\/\S/.test(text)
+    if (command && replies?.length) queueMicrotask(() => chat.attach((a) => ({ ...a, comments: replies })))
     // A side chat's own /btw is just a message: side chats don't have side chats.
-    if (!props.embedded && /^\/btw(\s|$)/.test(text)) return askAside(text.slice(4).trim(), attachments)
+    if (!props.embedded && /^\/btw(\s|$)/.test(text)) return askAside(text.slice(4).trim(), attached)
     chat.send({
-      text,
-      ...attachments,
+      text: replies?.length && !command ? commentsMessage(inOrder(replies, state.messages), text, REPLIES_LEAD) : text,
+      ...attached,
       cwd: cwd(),
       machine: machine(),
       mode: mode(),
@@ -396,6 +410,7 @@ export function Chat(props: {
   const body = (
     // Links to files in what it shows open them beside it.
     <OpenFile.Provider value={files}>
+    <ReplyComments.Provider value={comments}>
     <div class="flex h-full min-w-0 flex-1 flex-col">
       {/* One header on narrow screens: the page's bar above the chat's own row, divided only below. */}
       <Show when={!props.embedded}>
@@ -453,7 +468,11 @@ export function Chat(props: {
             composer to hang out by their own padding, so the text in them lines up with Claude's. */}
         <div class="mx-auto flex min-h-full max-w-[50rem] flex-col px-6 md:px-9">
           <div ref={content} class="relative flex-1 py-8">
-            <QuoteSelection within={() => content} onQuote={(text) => composer?.quote(text)} />
+            <QuoteSelection
+              within={() => content}
+              onQuote={(text) => composer?.quote(text)}
+              onComment={comments && ((quote, reply, range) => comments.setDraft({ on: reply.dataset.reply!, quote, ...offsetsIn(reply, range) }))}
+            />
             <Show when={state.loaded} fallback={<Loading class="pt-[22vh]" />}>
               <Show
                 when={state.messages.length}
@@ -658,6 +677,7 @@ export function Chat(props: {
         </div>
       </div>
     </div>
+    </ReplyComments.Provider>
     </OpenFile.Provider>
   )
   if (props.embedded) return body

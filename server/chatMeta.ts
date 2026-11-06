@@ -46,7 +46,7 @@ export class ChatMeta {
     const saved = this.draft(sessionId)
     const text = change.text ?? saved.text
     const attachments = change.attachments ?? saved.attachments
-    const attached = attachments.pastes.length > 0 || attachments.images.length > 0
+    const attached = attachments.pastes.length > 0 || attachments.images.length > 0 || !!attachments.comments?.length
     if (!text && !attached) this.db.sql.prepare('DELETE FROM session_drafts WHERE session_id = ?').run(sessionId)
     else
       this.db.sql

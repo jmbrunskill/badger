@@ -346,7 +346,7 @@ export class Chats {
         const saved = meta.draft(event.sessionId)
         return this.restoreDraft(event.sessionId, {
           text: [message.text, saved.text].filter(Boolean).join('\n\n'),
-          attachments: { pastes: [...message.pastes, ...saved.attachments.pastes], images: [...message.images, ...saved.attachments.images] },
+          attachments: { ...saved.attachments, pastes: [...message.pastes, ...saved.attachments.pastes], images: [...message.images, ...saved.attachments.images] },
         })
       }
       case 'interrupt':
@@ -444,7 +444,8 @@ export class Chats {
       // Turned away, so it never started: it can go elsewhere. Anything else, e.g. the connection dropping, it may have.
       if (!placed && err instanceof BadRequest) placement.unassign(sessionId, machine)
       // The message goes back in the composer, unless something's been typed since.
-      if (!meta.draft(sessionId).text) this.restoreDraft(sessionId, { text, attachments: { pastes, images } })
+      const saved = meta.draft(sessionId)
+      if (!saved.text) this.restoreDraft(sessionId, { text, attachments: { ...saved.attachments, pastes, images } })
       throw err
     }
   }
@@ -719,7 +720,7 @@ export class Chats {
   }
 }
 
-const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0
+const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0 || !!a.comments?.length
 
 /** What a child chat is listed as under its parent, from what it's for, e.g. Merge. */
 const childTitle = (kind: string) => (kind ? kind[0].toUpperCase() + kind.slice(1) : 'Chat')

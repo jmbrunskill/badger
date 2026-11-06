@@ -5,8 +5,9 @@ import { recall, remember, settle } from './scrollMemory.ts'
  * Keeps a scrolling element at the bottom as what's in it grows, until it's scrolled up; reaching the bottom
  * again sticks it back. For a transcript streaming in. Give the element `ref`, `onScroll` and `onWheel`, and
  * call `follow` once what grows is on the page. Given a `key`, where it was scrolled up to is remembered, for `restore`.
+ * It follows only while `when` holds: a new chat's folder picker, say, is read from the top.
  */
-export function createStickyScroll(key?: string) {
+export function createStickyScroll(key?: string, when: () => boolean = () => true) {
   let scroller!: HTMLElement
   let pinned = true
   let lastTop = 0
@@ -35,7 +36,7 @@ export function createStickyScroll(key?: string) {
     },
     /** Follows anything that changes size while stuck, for the owner's lifetime: messages, streaming, blocks opening. */
     follow: (...els: Element[]) => {
-      const observer = new ResizeObserver(() => pinned && toBottom())
+      const observer = new ResizeObserver(() => pinned && when() && toBottom())
       for (const el of els) observer.observe(el)
       onCleanup(() => observer.disconnect())
     },

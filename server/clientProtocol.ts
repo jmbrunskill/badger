@@ -1,5 +1,5 @@
 import { z, type ZodType } from 'zod'
-import { PERMISSION_MODES, type ClientEvent, type DraftAttachments } from '../shared/protocol.ts'
+import { PERMISSION_MODES, type ClientEvent, type DraftAttachments, type StartAt } from '../shared/protocol.ts'
 import { BadRequest } from './errors.ts'
 import { UUID, imageAttachment } from './runnerProtocol.ts'
 
@@ -22,6 +22,12 @@ const attachments = z.object({
     .optional(),
 }) satisfies ZodType<DraftAttachments, unknown>
 
+const start = z.object({
+  machine: z.string(),
+  cwd: z.string().optional(),
+  worktree: z.boolean().optional(),
+}) satisfies ZodType<StartAt, unknown>
+
 const CLIENT_EVENT = z.discriminatedUnion('type', [
   z.object({ type: z.literal('subscribe'), sessionId }),
   z.object({ type: z.literal('unsubscribe'), sessionId }),
@@ -40,7 +46,14 @@ const CLIENT_EVENT = z.discriminatedUnion('type', [
   z.object({ type: z.literal('unqueue'), sessionId, id: z.string(), edit: z.boolean().optional() }),
   z.object({ type: z.literal('stop_task'), sessionId, taskId: z.string() }),
   z.object({ type: z.literal('background_task'), sessionId, toolUseId: z.string().optional() }),
-  z.object({ type: z.literal('draft'), sessionId, text: z.string().optional(), attachments: attachments.optional() }),
+  // A UUID, since a draft can be of a chat that hasn't started, which it makes.
+  z.object({
+    type: z.literal('draft'),
+    sessionId: z.string().regex(UUID, 'sessionId must be a UUID'),
+    text: z.string().optional(),
+    attachments: attachments.optional(),
+    start: start.nullable().optional(),
+  }),
   z.object({ type: z.literal('set_mode'), sessionId, mode }),
   z.object({ type: z.literal('set_model'), sessionId, model: z.string() }),
   z.object({

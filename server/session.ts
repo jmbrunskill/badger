@@ -10,6 +10,7 @@ import type { KnownMessage, LiveSnapshot } from './runnerProtocol.ts'
 import { AutoChecks } from './session/checks.ts'
 import { sdkOptions } from './session/options.ts'
 import { Outbox, publicQueued } from './session/outbox.ts'
+import { gitNote, markGit } from './session/gitNote.ts'
 import { Permissions } from './session/permissions.ts'
 import { inaccessible } from './workspace.ts'
 
@@ -48,6 +49,8 @@ export class LiveSession {
   compacting?: number
   /** Any background work is running, the subagents' own included; closing the process would kill it. */
   busy = false
+  /** When it started working, while it is: the chat list shows how long it's been at it. */
+  workingSince?: number
 
   private queue = new MessageQueue()
   private agent: Query
@@ -75,6 +78,10 @@ export class LiveSession {
   private tools: SessionTools
   /** Context already shown with a message that Claude Code hasn't taken in yet, so it isn't shown twice. */
   private shownContext?: Promise<string | undefined>
+  /** What changed in git while the chat sat idle, for the message that starts its next turn. */
+  private gitChanged?: Promise<string | undefined>
+  /** Reading where git stands as a turn ends; the next turn's note waits for it. */
+  private gitMarked: Promise<void> = Promise.resolve()
 
   constructor(opts: {
     id: string
@@ -125,11 +132,14 @@ export class LiveSession {
         canUseTool: this.permissions.canUseTool,
         hooks: {
           promptContext: async () => {
-            const additionalContext = await this.context()
+            const card = await this.context()
+            const git = await this.gitChanged
             const shown = await this.shownContext
-            this.shownContext = undefined
+            this.gitChanged = this.shownContext = undefined
+            // Only the card's part is the hub's to count as seen.
+            if (card) this.tools.contextAdded?.(card)
+            const additionalContext = [card, git].filter(Boolean).join('\n\n') || undefined
             if (!additionalContext) return undefined
-            this.tools.contextAdded?.(additionalContext)
             if (additionalContext !== shown) this.record({ type: 'hook_context', uuid: randomUUID(), text: additionalContext })
             return additionalContext
           },
@@ -182,7 +192,10 @@ export class LiveSession {
       // Echo immediately so every tab shows the message before the SDK replays it.
       this.record({ ...message, timestamp: new Date().toISOString() } as unknown as WireMessage)
       // Shown with the message now rather than when Claude Code takes it in, which can be a while for a new worktree.
-      this.shownContext = this.context().then((text) => {
+      // Only here, starting a turn: a message taken in mid-turn would count Claude's own commits as changes.
+      this.gitChanged = this.gitMarked.then(() => gitNote(this.id, this.cwd))
+      this.shownContext = Promise.all([this.context(), this.gitChanged]).then((parts) => {
+        const text = parts.filter(Boolean).join('\n\n') || undefined
         if (text) this.record({ type: 'hook_context', uuid: randomUUID(), text })
         return text
       })
@@ -299,6 +312,8 @@ export class LiveSession {
     } catch (err) {
       this.emit({ type: 'error', sessionId: this.id, error: message(err) })
     } finally {
+      // A turn cut off before its result is still Claude's doing.
+      if (this.running) this.gitMarked = markGit(this.id, this.cwd)
       this.queue.close()
       this.makingWorktree = false
       this.compacting = undefined
@@ -366,6 +381,9 @@ export class LiveSession {
       // The chat list shows a chat waiting on background work as working.
       if (busy !== this.busy) {
         this.busy = busy
+        // What background work did after the turn ended was Claude's too, so it isn't news next turn.
+        if (!busy && !this.running) this.gitMarked = markGit(this.id, this.cwd)
+        this.noteWorking()
         this.onChange()
       }
       // A running subagent's own tasks show inside it. One that has paused to wait on them isn't in the set, so they show here.
@@ -399,6 +417,7 @@ export class LiveSession {
     wire.timestamp ??= new Date().toISOString()
     this.record(wire)
     if (msg.type === 'result') {
+      this.gitMarked = markGit(this.id, this.cwd)
       this.setRunning(false)
       this.onTurnEnd()
     } else if (msg.type === 'assistant') this.setRunning(true)
@@ -448,12 +467,18 @@ export class LiveSession {
     if (!running && !this.busy) this.idleTimer = setTimeout(() => this.close(), IDLE_CLOSE_MS)
     if (running === this.running) return
     this.running = running
+    this.noteWorking()
     this.emitStatus()
     this.onChange()
     if (!running) {
       // Outside this call stack: a callback may close this session.
       for (const fn of this.afterTurnCallbacks.splice(0)) setImmediate(fn)
     }
+  }
+
+  private noteWorking(): void {
+    if (!this.working) this.workingSince = undefined
+    else this.workingSince ??= Date.now()
   }
 
   private setCwd(cwd: string): void {

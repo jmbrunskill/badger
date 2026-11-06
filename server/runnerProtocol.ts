@@ -2,10 +2,12 @@ import { z, type ZodType } from 'zod'
 import type {
   AccountUsage,
   BaseChoices,
+  BranchChoices,
   Card,
   ChatCommand,
   ChatCommandReply,
   ChatStatus,
+  CommandInfo,
   GitStatus,
   ReviewDiff,
   ReviewScope,
@@ -68,6 +70,8 @@ export interface LiveInfo {
   cwd: string
   /** Taking a turn, or waiting on background work it started. */
   running: boolean
+  /** When it started running, while it is; ms since epoch, by the runner's clock. */
+  since?: number
   /** A permission prompt or question is waiting on the user. */
   waiting: boolean
   /** How many of its turns have ended (not counting ones queued messages carried on), since the runner started. */
@@ -165,6 +169,10 @@ export interface RunnerApi {
   /** Which of these folders Claude Code can't run in. */
   inaccessible(dirs: string[]): string[]
   workspaceRoot(cwd: string): string
+  /** The slash commands and skills a chat in `cwd` can run, with where each is from. */
+  commands(cwd: string): Promise<CommandInfo[]>
+  /** Files and folders under `cwd` matching what's typed after `@`, relative to it, best first. */
+  findFiles(cwd: string, typed: string): Promise<string[]>
   worktreeStatus(path: string): Promise<WorktreeStatus>
   /** Undefined outside a git repo. Fetches first if asked, at most once a minute. */
   gitStatus(path: string, fetch: boolean): Promise<GitStatus | undefined>
@@ -176,6 +184,9 @@ export interface RunnerApi {
   reviewDiff(path: string, scope: ReviewScope, context: number, only?: string): Promise<ReviewDiff>
   /** Fast-forward only; refused while a chat is working there. */
   gitPull(path: string): Promise<void>
+  branchChoices(path: string): Promise<BranchChoices>
+  /** `create` makes `to` a new branch from here. */
+  gitSwitch(path: string, to: string, create: boolean): Promise<void>
   /** Refused while a chat is working in it or it has terminals. */
   removeWorktree(path: string): Promise<void>
   /** The folders new chats can start in: these, from where its chats ran and what was added by hand, less the hidden ones. */
@@ -204,6 +215,8 @@ export const RUNNER_METHODS = [
   'importTranscript',
   'inaccessible',
   'workspaceRoot',
+  'commands',
+  'findFiles',
   'worktreeStatus',
   'gitStatus',
   'gitPush',
@@ -211,6 +224,8 @@ export const RUNNER_METHODS = [
   'setBase',
   'reviewDiff',
   'gitPull',
+  'branchChoices',
+  'gitSwitch',
   'removeWorktree',
   'listFolders',
   'folderSize',
@@ -375,6 +390,7 @@ const liveInfo = z.object({
   id: chatId,
   cwd: text(4096),
   running: z.boolean(),
+  since: z.number().optional(),
   waiting: z.boolean(),
   turns: count,
   agents: z.array(nestedChat).max(1000).optional(),

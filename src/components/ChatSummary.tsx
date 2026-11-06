@@ -1,4 +1,4 @@
-import { Show } from 'solid-js'
+import { Show, createSignal, onCleanup } from 'solid-js'
 import type { Card, SessionSummary } from '../../shared/protocol.ts'
 import { attention } from '../attention.ts'
 import { folderLabel } from '../folders.ts'
@@ -23,15 +23,45 @@ export function ChatSummary(props: {
     <>
       <div class="flex items-center gap-2">
         <span class={`min-w-0 flex-1 truncate text-ui ${props.titleClass}`}>{s().title}</span>
+        <Show when={s().running && s().runningSince}>{(since) => <Working since={since()} />}</Show>
         <ChatDot running={s().running} attention={attention()[s().id]} />
       </div>
       <div class={`mt-0.5 flex gap-1.5 text-meta text-fg-3 tabular-nums ${props.metaClass ?? ''}`}>
+        <Show when={s().draft}>
+          <span class="shrink-0 text-accent" title={s().unstarted ? 'Not sent yet' : 'Something’s typed in it and not sent'}>
+            Draft
+          </span>
+        </Show>
         <span class="truncate">{s().cwd && folderLabel(s().cwd!)}</span>
         <Show when={onMachine(s().machine)}>{(name) => <MachineName machine={s().machine} name={name()} />}</Show>
         <Show when={props.card}>{(c) => <span class="shrink-0">#{c().id}</span>}</Show>
         <span class={`ml-auto shrink-0 ${props.timeClass ?? ''}`}>{when(s().lastModified)}</span>
       </div>
     </>
+  )
+}
+
+/** Ticks every few seconds for every <Working> on the page, while there's one: often enough to turn each minute over on time. */
+const [now, setNow] = createSignal(Date.now())
+let ticking = 0
+let timer: ReturnType<typeof setInterval> | undefined
+
+/** How long a chat has been working, in minutes, once that's one: one at it a while may have stalled. */
+function Working(props: { since: number }) {
+  if (!ticking++) {
+    setNow(Date.now())
+    timer = setInterval(() => setNow(Date.now()), 5000)
+  }
+  onCleanup(() => {
+    if (!--ticking) clearInterval(timer)
+  })
+  const minutes = () => Math.floor((now() - props.since) / 60_000)
+  return (
+    <Show when={minutes() >= 1}>
+      <span class="shrink-0 text-meta text-fg-3 tabular-nums">
+        {minutes() >= 60 ? `${Math.floor(minutes() / 60)}h ${minutes() % 60}m` : `${minutes()}m`}
+      </span>
+    </Show>
   )
 }
 

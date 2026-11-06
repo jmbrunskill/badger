@@ -1,12 +1,12 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onMount, untrack, type Accessor, type JSX } from 'solid-js'
 import { FolderX, GitBranch, MonitorOff, Pencil, WifiOff, X } from '../icons'
-import type { DraftAttachments, PermissionMode, QueuedMessage } from '../../shared/protocol.ts'
+import { NO_ATTACHMENTS, type DraftAttachments, type PermissionMode, type QueuedMessage, type StartAt } from '../../shared/protocol.ts'
 import { chatActions } from '../actions.ts'
 import { api, connected } from '../api.ts'
 import { cardWorktreeName, isScratch, worktreeOf } from '../folders.ts'
 import { diffView, openFile, openTerminal, openView, planView, setFileMode, viewKey, viewShown, wide } from '../layout.ts'
-import { OpenFile, useOpenFile } from '../fileLinks.ts'
-import { FileView } from './FileView.tsx'
+import { OpenFile, expandHome, useOpenFile } from '../fileLinks.ts'
+import { FileView, openingMode } from './FileView.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
 import { REPLIES_LEAD, ReplyComments, commentsMessage, createReplyComments, inOrder, offsetsIn } from '../replyComments.tsx'
 import { sideChatsOf, startSideChat } from '../btw.ts'
@@ -18,7 +18,8 @@ import { sentToSubagentBy } from '../../shared/toSubagent.ts'
 import { cardOf } from '../stores/cards.ts'
 import { sessionById } from '../stores/sessions.ts'
 import { knownRoot, workspaceOf, type Ws } from '../terminals.ts'
-import { Checking, ChildChats, NO_ATTACHMENTS, createChat, createChildChats, type Chat as ChatHandle } from '../useChat.ts'
+import { defaultStart, rememberMachine } from '../drafts.ts'
+import { Checking, ChildChats, createChat, createChildChats, type Chat as ChatHandle } from '../useChat.ts'
 import { ChatHeader, createGitStatus } from './ChatHeader.tsx'
 import { Composer, type ComposerControls } from './Composer.tsx'
 import { FolderPicker } from './FolderPicker.tsx'
@@ -42,19 +43,14 @@ import { Loading, Notice, PaneBar, Segmented, touch } from './ui.tsx'
 
 export function Chat(props: {
   sessionId: string
-  draftCwd?: string
-  /** The runner a chat that hasn't started will run on; the hub's own if not given. */
-  draftMachine?: string
-  /** Given, the empty chat offers runners, folders and worktrees to start in until the first message goes out. */
-  onPickCwd?: (cwd: string, machine: string) => void
-  /** Start with "New worktree" picked. */
-  worktree?: boolean
-  onPickWorktree?: (worktree: boolean) => void
   /** Called once, when the first message is sent. */
   onStart?: () => void
   /** The top bar on narrow screens, to go above the chat's header. */
   bar?: JSX.Element
-  /** Shown in a panel beside another chat, as a side chat is: no header, and no panels of its own. */
+  /**
+   * Shown in a panel beside another chat, as a side chat is: no header, and no panels of its own. Only a chat that
+   * isn't embedded offers runners, folders and worktrees to start in until its first message goes out.
+   */
   embedded?: boolean
   /** Called once, with a way to put the cursor in its composer. */
   onReady?: (focus: () => void) => void
@@ -64,17 +60,19 @@ export function Chat(props: {
    */
   host?: { chat: ChatHandle; index: Accessor<Index>; agent: Agent; id: string }
 }) {
-  const chat = props.host?.chat ?? createChat(props.sessionId)
+  const chat: ChatHandle = props.host?.chat ?? createChat(props.sessionId, () => (picking() ? start() : undefined))
   const state = chat.state
-  /** The chat as the sidebar lists it, for the header's title, move, rename and archive. Absent until it's listed. */
-  const session = () => sessionById(props.sessionId)
+  /** The chat as the sidebar lists it, which may be a draft that hasn't started. */
+  const listed = () => sessionById(props.sessionId)
+  /** Once it's started and listed, for the header's title, move, rename and archive. */
+  const session = () => (listed()?.unstarted ? undefined : listed())
   let composer: ComposerControls | undefined
   /** Comments on Claude's replies, kept with the draft until the next message; a subagent's chat has no draft on the server to keep them. */
   const comments = props.host
     ? undefined
     : createReplyComments({
-        comments: () => state.draftAttachments.comments ?? [],
-        attach: (change) => chat.attach((a) => ({ ...a, comments: change(a.comments ?? []) })),
+        comments: () => state.draft.attachments.comments ?? [],
+        attach: (change) => chat.editDraft({ attachments: { ...state.draft.attachments, comments: change(state.draft.attachments.comments ?? []) } }),
       })
 
   const [started, setStarted] = createSignal(false)
@@ -98,25 +96,38 @@ export function Chat(props: {
     chat.setModel(next)
   }
 
-  const [inWorktree, setInWorktree] = createSignal(!!props.worktree)
+  /** Not heard of running anywhere yet, so it runs where it's picked to. One in the list has started, even before its transcript is here. */
+  const unstarted = (): boolean => !props.embedded && !state.cwd && !session()
+  /** And not sent from here, so where it runs is still being picked. */
+  const picking = (): boolean => unstarted() && !started()
+  /**
+   * Where it will run while it hasn't started: as kept with its draft, or the defaults for a new chat. Not those
+   * before its draft is here, since it may have its own.
+   */
+  const start = (): StartAt | undefined => state.draft.start ?? (state.loaded && unstarted() ? defaultStart(props.sessionId) : undefined)
+  const pickStart = (at: StartAt) => {
+    rememberMachine(at.machine)
+    chat.startAt(at)
+  }
   /** The card this chat is on. A worktree it starts in is named after the card; otherwise Claude names it. */
   const card = () => cardOf(props.sessionId)
   const worktreeName = () => card() && cardWorktreeName(card()!)
   // Offered before the first message, for a repo checkout that isn't already a worktree.
   const canWorktree = () => !started() && !state.cwd && !session() && !!cwd() && !isScratch(cwd()) && !worktreeOf(cwd())
-  const cwd = () => state.cwd ?? session()?.cwd ?? props.draftCwd
+  const inWorktree = () => !!start()?.worktree
+  /** Where it will run, picked or not. A draft is listed where it will, which serves until its own is here. */
+  const willStart = () => (unstarted() ? (start() ?? listed()) : undefined)
+  const cwd = () => state.cwd ?? session()?.cwd ?? willStart()?.cwd
   /**
    * A chat stays on the machine it started on; one that hasn't started goes where it was picked. Until the
    * server says which, a chat started elsewhere is taken to be on the hub's, but not one just sent from here.
    */
-  const machine = () => state.machine ?? (state.cwd && !started() ? LOCAL : (props.draftMachine ?? LOCAL))
+  const machine = () => state.machine ?? (state.cwd && !started() ? LOCAL : (session()?.machine ?? willStart()?.machine ?? LOCAL))
   // Its runner isn't connected, so it can be read but can't run. A memo, since the machine list changes
   // whenever any machine's chats start or stop.
   const offline = createMemo(() => !isOnline(machine()))
   /** Offline as far as the hub knows. While the hub itself can't be reached, what's typed still queues up for it. */
   const stranded = () => offline() && connected()
-  /** Not started yet, so where it runs is still being picked. One in the list has started, even before its transcript is here. */
-  const picking = () => !!props.onPickCwd && !state.cwd && !session() && !started()
   // Holds the last one while a new folder's is looked up, so moving into a worktree doesn't drop the terminals button for a moment.
   const ws = createMemo<Ws | undefined>(
     (last) => {
@@ -140,7 +151,11 @@ export function Chat(props: {
   // A subagent's panel shows none of the chat's child chats, so it needn't follow them a second time.
   const children = props.host ? { state: () => undefined, prompts: () => [] } : createChildChats(state)
 
-  const sticky = createStickyScroll(`chat:${untrack(() => props.sessionId)}${untrack(() => (props.host ? `:${props.host.id}` : ''))}`)
+  // Not before the first message: until then it's the new chat's folder picker, read from the top.
+  const sticky = createStickyScroll(
+    `chat:${untrack(() => props.sessionId)}${untrack(() => (props.host ? `:${props.host.id}` : ''))}`,
+    () => state.messages.length > 0,
+  )
   let content!: HTMLDivElement
   let bottom!: HTMLDivElement
   let scroller!: HTMLDivElement
@@ -173,8 +188,9 @@ export function Chat(props: {
         cwd: () => cwd(),
         open: (path: string, line?: number) => {
           const w = beside()
+          if (!w) return
           // Opening it is asking for the file, so a tab showing its diff switches back.
-          if (w) openFile(w, { kind: 'file', session: props.sessionId, path, line, mode: 'file' })
+          void expandHome(path, machine()).then((path) => openFile(w, { kind: 'file', session: props.sessionId, path, line, mode: openingMode(path, line) }))
         },
       }
 
@@ -281,6 +297,7 @@ export function Chat(props: {
                   composer?.insert(markdown)
                 }
           }
+          onOpen={(path) => ws() && openFile(ws()!, { kind: 'file', session: props.sessionId, path, mode: openingMode(path) })}
           renderDiff={(only, lead) => reviewPage(false, { lead, only, whole: true })}
         />
       </div>
@@ -309,7 +326,7 @@ export function Chat(props: {
     const { comments: replies, ...attached } = attachments
     // A command can't go after comments, which would make it text: they wait for the next message, put back once the composer's cleared.
     const command = /^\/\S/.test(text)
-    if (command && replies?.length) queueMicrotask(() => chat.attach((a) => ({ ...a, comments: replies })))
+    if (command && replies?.length) queueMicrotask(() => chat.editDraft({ attachments: { ...state.draft.attachments, comments: replies } }))
     // A side chat's own /btw is just a message: side chats don't have side chats.
     if (!props.embedded && /^\/btw(\s|$)/.test(text)) return askAside(text.slice(4).trim(), attached)
     chat.send({
@@ -497,9 +514,7 @@ export function Chat(props: {
                         worktree={inWorktree() && canWorktree()}
                         worktreeName={worktreeName()}
                         onPick={(dir, worktree, picked) => {
-                          props.onPickCwd!(dir, picked)
-                          setInWorktree(worktree)
-                          props.onPickWorktree?.(worktree)
+                          pickStart({ machine: picked, cwd: dir, worktree })
                         }}
                       />
                     </div>
@@ -655,6 +670,7 @@ export function Chat(props: {
               </Show>
               <Composer
                 ref={(c) => (composer = c)}
+                above={() => bottom}
                 chat={chat}
                 machine={machine()}
                 cwd={cwd()}

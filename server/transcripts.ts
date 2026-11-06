@@ -182,7 +182,7 @@ export class Transcripts {
    * Subagent messages come last; each carries the parent_tool_use_id of the call that started it.
    */
   async transcript(id: string): Promise<WireMessage[]> {
-    const entries = (this.entries(id, '') ?? []) as Entry[]
+    const entries = relinked((this.entries(id, '') ?? []) as Entry[])
     const [messages, subagents] = await Promise.all([this.mainMessages(id, entries).catch(() => []), this.subagentMessages(id).catch(() => [])])
     const { meta, apiErrors, added } = contextOf(entries)
     // Each added message goes after the nearest message it descends from, so it's where it happened.
@@ -356,6 +356,23 @@ function contextOf(entries: Entry[]): { meta: Set<string>; apiErrors: Map<string
     }
   }
   return { meta, apiErrors, added }
+}
+
+/**
+ * When Claude Code throws away a reply it couldn't use (e.g. a malformed tool
+ * call), the entry after it still names that reply as its parent, though it
+ * was never saved. The SDK's reader walks parents back from the newest message
+ * and stops there, losing everything before. Such entries are linked to the
+ * entry before them instead.
+ */
+function relinked(entries: Entry[]): Entry[] {
+  const uuids = new Set(entries.flatMap((e) => (e.uuid ? [e.uuid] : [])))
+  let previous: string | undefined
+  return entries.map((e) => {
+    const out = e.parentUuid && !uuids.has(e.parentUuid) && previous ? { ...e, parentUuid: previous } : e
+    if (e.uuid && !e.isSidechain) previous = e.uuid
+    return out
+  })
 }
 
 /** Lines that parse; a torn or corrupt one is skipped rather than losing the rest. */

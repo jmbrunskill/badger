@@ -1,13 +1,17 @@
 import { For, Index, Show, createEffect, createMemo, createResource, createSelector, createSignal, on, onMount, type JSX } from 'solid-js'
-import { RotateCw } from '../icons'
+import { RotateCw, TextWrap } from '../icons'
 import type { ReviewDiff } from '../../shared/protocol.ts'
 import { api } from '../api.ts'
 import { changedLines } from '../diffRows.ts'
 import { plural } from '../format.ts'
+import { toggleWrap, wrap } from '../prefs.ts'
 import { highlight, languageOf } from '../highlight.ts'
 import { CodeRow } from './CodeRow.tsx'
 import { QuoteSelection } from './QuoteSelection.tsx'
-import { DiffCount, GhostButton, PaneBar, PathLabel, Segmented } from './ui.tsx'
+import { Breadcrumbs } from './Breadcrumbs.tsx'
+import { Markdown } from './Markdown.tsx'
+import { OpenFile, fileLink, useOpenFile } from '../fileLinks.ts'
+import { DiffCount, GhostButton, PaneBar, Segmented } from './ui.tsx'
 
 /** Lines drawn per block; blocks off screen skip layout, so a long file costs little until it's scrolled through. */
 const BLOCK = 200
@@ -16,7 +20,37 @@ const MAX_LINES = 20_000
 /** The images the server sends as images; anything else, an SVG say, comes as text. */
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i
 
-export type FileMode = 'file' | 'diff'
+/** How much further in than its line a wrapped line's later rows start. */
+const HANG = 2
+/** Columns between tab stops: Tailwind's base styles make it 4, not the browser's 8. */
+const TAB = 4
+
+/** What's drawn rendered rather than as its source, unless a line in it is asked for. */
+const MARKDOWN = /\.(md|markdown|mdx)$/i
+
+export type FileMode = 'file' | 'rendered' | 'diff'
+
+/** How a file opens: Markdown rendered, to read, unless it's opened at a line, which only its source has. */
+export const openingMode = (path: string, line?: number): FileMode => (MARKDOWN.test(path) && !line ? 'rendered' : 'file')
+
+const dirOf = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/'
+
+/**
+ * Markdown as it's drawn in a file's pane: frontmatter as the YAML it is, rather than run into a heading, and
+ * `[[name]]`, how memory files point at each other, as a link to `name.md` beside it.
+ */
+function readable(text: string): string {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text)
+  const body = (front ? text.slice(front[0].length) : text).replace(/\[\[([^\]\n|/]+)\]\]/g, (_, name: string) => `[${name}](${encodeURI(name.trim())}.md)`)
+  return front ? `\`\`\`yaml\n${front[1]}\n\`\`\`\n\n${body}` : body
+}
+
+/** How many columns text takes in monospace, its tabs taken to their stops. */
+function columns(text: string): number {
+  let col = 0
+  for (const ch of text) col = ch === '\t' ? col + TAB - (col % TAB) : col + 1
+  return col
+}
 
 /** A file's text, or why there's none to show. */
 async function readText(path: string, machine: string): Promise<{ text: string } | { error: string }> {
@@ -52,6 +86,8 @@ export function FileView(props: {
   onReady?: (focus: () => void) => void
   /** Adds lines picked out of it to the chat's message, as Markdown; absent when the chat can't take one. */
   onQuote?: (markdown: string) => void
+  /** Opens another file, picked from its path's folders. */
+  onOpen?: (path: string) => void
   /** The file's diff, `lead` first in its toolbar; `only` is its path in the checkout. */
   renderDiff: (only: string, lead: JSX.Element) => JSX.Element
 }) {
@@ -59,6 +95,19 @@ export function FileView(props: {
   const reload = () => setVersion((n) => n + 1)
   createEffect(on(() => props.running, (r) => !r && reload(), { defer: true }))
   const image = () => IMAGE.test(props.path)
+  const markdown = () => MARKDOWN.test(props.path)
+  /** Drawn as Markdown, rather than line by line. */
+  const rendered = () => props.mode === 'rendered' && markdown()
+  // Its links and images are from its folder, not the chat's.
+  const outer = useOpenFile()
+  const links = {
+    cwd: () => dirOf(props.path),
+    open: (path: string, line?: number) => (outer ? outer.open(path, line) : props.onOpen?.(path)),
+  }
+  const imageUrl = (src: string) => {
+    const to = fileLink(src, dirOf(props.path))
+    return to && api.fileUrl(to.path, props.machine)
+  }
 
   const [content] = createResource(
     () => !image() && { path: props.path, machine: props.machine, v: version() },
@@ -77,11 +126,12 @@ export function FileView(props: {
     const root = diff()?.root
     return root && props.path.startsWith(`${root}/`) ? props.path.slice(root.length + 1) : undefined
   }
-  /** Why its Diff can't be shown: the changes couldn't be read, or it isn't in them. */
+  /** Why its Diff can't be shown: there's no checkout, its changes couldn't be read, or the file is outside it. */
   const noDiff = () => {
+    if (!props.cwd) return 'There’s no checkout to diff this file against.'
     const c = changes()
     if (changes.loading && !c) return 'Reading the changes…'
-    return c && 'error' in c ? `Couldn’t read the changes: ${c.error}` : 'This file isn’t in the checkout’s changes.'
+    return c && 'error' in c ? `Couldn’t read the changes: ${c.error}` : 'This file isn’t in the checkout, so it has no diff.'
   }
 
   const text = () => {
@@ -109,6 +159,28 @@ export function FileView(props: {
   const html = () => {
     const c = colours()
     return c && c.text === text() ? c.lines : undefined
+  }
+  /**
+   * The longest line drawn, in characters with its tabs taken to their stops: the lines' width before any is laid out,
+   * since blocks off screen skip layout and so add no width of their own.
+   */
+  const widest = createMemo(() => {
+    let most = 0
+    for (const line of shown()) most = Math.max(most, columns(line))
+    return most
+  })
+  const codeClass = () => `pr-4 pl-2 text-fg ${wrap() ? 'min-w-0 flex-1 whitespace-pre-wrap break-words' : 'whitespace-pre'}`
+  /**
+   * Wrapped, a line's later rows start under its code, a step in from where it starts, so they read as part of it
+   * rather than lines of their own: its padding takes in its indent and the step, and its first row is pulled back.
+   * Tab stops are counted from the padding, not from where the first row starts, so a line with a tab in it hangs by
+   * whole stops, or its tabs would land short.
+   */
+  const codeStyle = (text: string): JSX.CSSProperties | undefined => {
+    if (!wrap()) return undefined
+    let hang = columns(text.match(/^[\t ]*/)![0]) + HANG
+    if (text.includes('\t')) hang = Math.ceil(hang / TAB) * TAB
+    return { 'padding-left': `calc(0.5rem + ${hang}ch)`, 'text-indent': `-${hang}ch` }
   }
   const blocks = createMemo(() => {
     const out: number[] = []
@@ -173,23 +245,40 @@ export function FileView(props: {
       value={props.mode}
       onChange={props.onMode}
       options={[
-        { value: 'file', label: 'File', title: 'As it is now, its changes marked in the margin' },
+        ...(markdown() ? [{ value: 'rendered' as const, label: 'Rendered', title: 'As it reads, its Markdown drawn' }] : []),
+        { value: 'file', label: markdown() ? 'Source' : 'File', title: 'As it is now, its changes marked in the margin' },
         { value: 'diff', label: 'Diff', title: 'All of it with its changes in place: lines taken out and put in' },
       ]}
     />
   )
 
+  const crumbs = (after?: JSX.Element) => (
+    <Breadcrumbs path={props.path} root={diff()?.root} machine={props.machine} onOpen={props.onOpen} after={after} />
+  )
+
   return (
     <Show
-      when={props.mode === 'file'}
+      when={props.mode !== 'diff'}
       fallback={
-        <Show when={relative()} fallback={<p class="p-6 text-center text-ui text-fg-3">{noDiff()}</p>}>
+        <Show
+          when={relative()}
+          fallback={
+            // Its bar stays, so the other views are still a click away.
+            <div class="flex min-h-0 flex-1 flex-col text-ui">
+              <PaneBar class="whitespace-nowrap text-fg-3">
+                {toggle()}
+                {crumbs()}
+              </PaneBar>
+              <p class="p-6 text-center text-fg-3">{noDiff()}</p>
+            </div>
+          }
+        >
           {(only) =>
             props.renderDiff(
               only(),
               <>
                 {toggle()}
-                <PathLabel path={only()} class="text-fg-3" />
+                {crumbs()}
               </>,
             )
           }
@@ -199,9 +288,12 @@ export function FileView(props: {
       <div class="flex min-h-0 flex-1 flex-col text-ui">
         <PaneBar class="whitespace-nowrap text-fg-3">
           {toggle()}
-          <PathLabel path={relative() ?? props.path} />
-          <Show when={changed().file}>{(f) => <DiffCount files={1} added={f().added} removed={f().removed} class="shrink-0" />}</Show>
-          <div class="flex-1" />
+          {crumbs(<Show when={changed().file}>{(f) => <DiffCount files={1} added={f().added} removed={f().removed} class="shrink-0" />}</Show>)}
+          <Show when={!image() && !rendered()}>
+            <GhostButton title={wrap() ? 'Don’t wrap long lines' : 'Wrap long lines'} active={wrap()} aria-pressed={wrap()} onClick={toggleWrap}>
+              <TextWrap class="size-3.5" />
+            </GhostButton>
+          </Show>
           <GhostButton title="Read it again" onClick={reload} class="-mr-1.5">
             <RotateCw class={`size-3.5 ${content.loading ? 'animate-spin' : ''}`} />
           </GhostButton>
@@ -215,47 +307,64 @@ export function FileView(props: {
           <Show when={content()}>
             {(c) => (
               <Show when={'text' in c()} fallback={<p class="p-6 text-center text-fg-3">{(c() as { error: string }).error}</p>}>
-                <div ref={linesEl} class="relative min-w-max py-1 font-mono text-xs leading-5">
-                  <Show when={props.onQuote}>{(q) => <QuoteSelection within={() => linesEl} onQuote={(_, range) => q()(quoted(range))} />}</Show>
-                  <For each={blocks()}>
-                    {(start) => (
-                      <div style={{ 'content-visibility': 'auto', 'contain-intrinsic-size': `auto ${Math.min(BLOCK, shown().length - start) * 20}px` }}>
-                        {/* By place, not by text: read again with a line put in above, each row keeps its number and takes the new text. */}
-                        <Index each={shown().slice(start, start + BLOCK)}>
-                          {(text, i) => {
-                            const n = start + i + 1
-                            const added = () => changed().added.has(n)
-                            const removed = () => changed().removed.get(n)
-                            return (
-                              <CodeRow
-                                data-line={n}
-                                numbers={[n]}
-                                lit={isLit(n)}
-                                // Changes only marked in the margin, so the file reads as the file: a green edge by a
-                                // line added, a small red notch where lines were taken out. Its Diff shows them.
-                                gutter={{
-                                  class: `relative border-l-2 ${added() ? 'border-ok/70' : 'border-transparent'} ${
-                                    removed() ? "before:absolute before:-top-1 before:-left-0.5 before:border-y-4 before:border-l-4 before:border-y-transparent before:border-l-danger/80 before:content-['']" : ''
-                                  }`,
-                                  title: added() ? 'Added' : removed() ? `${plural(removed()!, 'line')} taken out above this one` : undefined,
-                                }}
-                              >
-                                <Show when={html()?.[n - 1]} fallback={<span class="whitespace-pre pr-4 pl-2 text-fg">{text()}</span>}>
-                                  {(h) => <span class="whitespace-pre pr-4 pl-2 text-fg" innerHTML={h()} />}
-                                </Show>
-                              </CodeRow>
-                            )
-                          }}
-                        </Index>
-                      </div>
-                    )}
-                  </For>
-                  <Show when={lines().length > shown().length}>
-                    <p class="px-4 py-3 font-sans text-fg-3">
-                      Only the first {MAX_LINES.toLocaleString()} of its {lines().length.toLocaleString()} lines are shown here.
-                    </p>
-                  </Show>
-                </div>
+                <Show when={rendered()}>
+                  <OpenFile.Provider value={links}>
+                    <div class="mx-auto max-w-3xl px-6 py-5">
+                      <Markdown text={readable(text()!)} image={imageUrl} />
+                    </div>
+                  </OpenFile.Provider>
+                </Show>
+                <Show when={!rendered()}>
+                  <div ref={linesEl} class={`relative py-1 font-mono text-xs leading-5 ${wrap() ? '' : 'min-w-max'}`}>
+                    {/* The number's room and the line's padding (see CodeRow) beside the longest line, as a guess at its
+                        width; lines drawn wider than their characters, as CJK and emoji are, widen it past that. */}
+                    <Show when={!wrap()}>
+                      <div style={{ width: `calc(${widest() + Math.max(4, String(shown().length).length)}ch + 2.25rem)` }} />
+                    </Show>
+                    <Show when={props.onQuote}>{(q) => <QuoteSelection within={() => linesEl} onQuote={(_, range) => q()(quoted(range))} />}</Show>
+                    <For each={blocks()}>
+                      {(start) => (
+                        // Its height guessed until it's drawn, but no width: one length alone would be taken for both, and
+                        // a block off screen would claim to be thousands of pixels wide.
+                        <div style={{ 'content-visibility': 'auto', 'contain-intrinsic-size': `auto 0px auto ${Math.min(BLOCK, shown().length - start) * 20}px` }}>
+                          {/* By place, not by text: read again with a line put in above, each row keeps its number and takes the new text. */}
+                          <Index each={shown().slice(start, start + BLOCK)}>
+                            {(text, i) => {
+                              const n = start + i + 1
+                              const added = () => changed().added.has(n)
+                              const removed = () => changed().removed.get(n)
+                              return (
+                                <CodeRow
+                                  data-line={n}
+                                  number={n}
+                                  digits={String(shown().length).length}
+                                  lit={isLit(n)}
+                                  // Changes only marked in the margin, so the file reads as the file: a green edge by a
+                                  // line added, a small red notch where lines were taken out. Its Diff shows them.
+                                  gutter={{
+                                    class: `relative border-l-2 ${added() ? 'border-ok/70' : 'border-transparent'} ${
+                                      removed() ? "before:absolute before:-top-1 before:-left-0.5 before:border-y-4 before:border-l-4 before:border-y-transparent before:border-l-danger/80 before:content-['']" : ''
+                                    }`,
+                                    title: added() ? 'Added' : removed() ? `${plural(removed()!, 'line')} taken out above this one` : undefined,
+                                  }}
+                                >
+                                  <Show when={html()?.[n - 1]} fallback={<span class={codeClass()} style={codeStyle(text())}>{text()}</span>}>
+                                    {(h) => <span class={codeClass()} style={codeStyle(text())} innerHTML={h()} />}
+                                  </Show>
+                                </CodeRow>
+                              )
+                            }}
+                          </Index>
+                        </div>
+                      )}
+                    </For>
+                    <Show when={lines().length > shown().length}>
+                      <p class="px-4 py-3 font-sans text-fg-3">
+                        Only the first {MAX_LINES.toLocaleString()} of its {lines().length.toLocaleString()} lines are shown here.
+                      </p>
+                    </Show>
+                  </div>
+                </Show>
               </Show>
             )}
           </Show>

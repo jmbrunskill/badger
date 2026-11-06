@@ -6,6 +6,23 @@
 export const PERMISSION_MODES = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'] as const
 export type PermissionMode = (typeof PERMISSION_MODES)[number]
 
+/** Where a slash command comes from: Claude Code itself, a skill or command file, a plugin, claude.ai, or an MCP server. */
+export type CommandSource = 'project' | 'user' | 'plugin' | 'synced' | 'mcp' | 'builtin'
+
+/** A slash command or skill a chat in some folder can run, as `/name`. */
+export interface CommandInfo {
+  name: string
+  description: string
+  argumentHint?: string
+  source: CommandSource
+  /** The plugin or MCP server it's from. */
+  origin?: string
+  /** The file that defines it, for user and project ones. */
+  path?: string
+  /** Another of the same name is the one `/name` runs. */
+  shadowed?: boolean
+}
+
 /** A model Claude Code offers, as its model picker lists it. */
 export interface ModelOption {
   /** What to pass to Claude Code: an alias like `opus`, a model id, or `default`. */
@@ -90,12 +107,21 @@ export interface SessionSummary {
   machine?: string
   lastModified: number
   running: boolean
+  /** When it started running, while it is; ms since epoch. */
+  runningSince?: number
   /** Hidden from the sidebar's main list. Archiving never deletes the transcript. */
   archived: boolean
   /** Its directory no longer exists, e.g. a removed worktree. */
   gone?: boolean
   /** A review chat: it guides you through its checkout's changes, and its page shows them. */
   review?: boolean
+  /**
+   * It hasn't started: it's a draft, listed because something's typed in it. Its folder and machine are where it
+   * will run, and its title the start of what's typed.
+   */
+  unstarted?: boolean
+  /** Something's typed in it and not sent. */
+  draft?: boolean
   /** A side chat (/btw): the chat it's under, shown in a panel beside that rather than in the sidebar. */
   sideOf?: string
   /** For a side chat, when it was forked: it knows its parent as it was then. */
@@ -165,10 +191,25 @@ export interface BaseChoices {
   current?: { branch: string; how: BaseHow }
   /** What was picked by hand: a branch, or '' for none. Undefined when it's worked out. */
   set?: string
+  /** Where the branch pushes to, e.g. origin/spike, with the commits not pushed yet: for seeing just those. */
+  upstream?: { branch: string; ahead: number }
   /** The likely bases, nearest first, with the commits HEAD has that each doesn't. */
   likely: { branch: string; ahead: number }[]
   /** Every other branch, local and remote, most recent first. */
   others: string[]
+}
+
+/** The branches a checkout could switch to, most recently committed first. */
+export interface BranchChoices {
+  /** Empty when HEAD is detached. */
+  branch: string
+  branches: {
+    /** As git names it: a local branch, or origin/fix for one only on the remote, which switching to makes a local branch of. */
+    name: string
+    remote?: boolean
+    /** The other checkout it's checked out in, where git won't check it out a second time. */
+    elsewhere?: string
+  }[]
 }
 
 /** Where a checkout stands, for the bar above a chat: what's uncommitted, and how it compares with its upstream and, in a worktree, the main checkout. */
@@ -393,6 +434,31 @@ export type ReplyComment = { id: string; on: string; quote: string; start?: numb
 /** Big pastes, images and comments on replies waiting in the composer to be sent. */
 export type DraftAttachments = { pastes: string[]; images: ImageAttachment[]; comments?: ReplyComment[] }
 
+export const NO_ATTACHMENTS: DraftAttachments = { pastes: [], images: [] }
+export const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0 || !!a.comments?.length
+
+/** Where a chat that hasn't started will run: its runner, the folder there, and whether in a new worktree of it. */
+export type StartAt = { machine: string; cwd?: string; worktree?: boolean }
+
+/**
+ * What's in a chat's composer and not sent, kept on the hub so it survives reloads and every tab shows the same.
+ * A chat that hasn't started keeps where it will run with it, once that's been picked or something's typed.
+ */
+export type Draft = { text: string; attachments: DraftAttachments; start?: StartAt }
+
+export const NO_DRAFT: Draft = { text: '', attachments: NO_ATTACHMENTS }
+
+/** Parts of a draft to replace. A start of null clears it, since an undefined one doesn't survive being sent. */
+export type DraftChange = { text?: string; attachments?: DraftAttachments; start?: StartAt | null }
+
+export function changeDraft(draft: Draft, change: DraftChange): Draft {
+  const { start, ...rest } = change
+  const next = { ...draft, ...rest }
+  if (start === null) delete next.start
+  else if (start) next.start = start
+  return next
+}
+
 /** A message sent while Claude was busy, which Claude Code holds until its next break; it can be withdrawn until then. */
 export interface QueuedMessage {
   id: string
@@ -482,8 +548,8 @@ export type ClientEvent =
   /** With edit, a withdrawn message goes back into the composer ahead of what's typed there. */
   | { type: 'unqueue'; sessionId: string; id: string; edit?: boolean }
   | (Exclude<ChatCommand, { type: 'unqueue' }> & { sessionId: string })
-  /** The composer's unsent text and attachments; each one given replaces what's saved. */
-  | { type: 'draft'; sessionId: string; text?: string; attachments?: DraftAttachments }
+  /** Parts of a chat's draft; each one given replaces what's saved. */
+  | ({ type: 'draft'; sessionId: string } & DraftChange)
   /** An uncaught error in the page, for the server to log. */
   | { type: 'client_error'; message: string; stack?: string; url: string }
   /** The user is looking at this chat, so it's no longer unread. */
@@ -559,15 +625,16 @@ export type ServerEvent =
       machine?: string
       /** Its folder is gone or can't be opened, e.g. a worktree removed after merging, so it can't run. */
       gone?: boolean
-      /** Unsent composer text, in the same message as the transcript so they arrive together. */
-      draft: string
-      draftAttachments: DraftAttachments
+      /** In the same message as the transcript, so they arrive together. */
+      draft: Draft
       /** Chats this one started from a tool call and waited on, by that call's tool_use_id. */
       children: Record<string, string>
+      /** For a child chat: the chat that started it, and the call there that did, so it's listed under that. */
+      parent?: { id: string; toolUseId: string; title: string }
     })
   | { type: 'message'; sessionId: string; message: WireMessage }
-  /** Another viewer changed the chat's unsent text or attachments. */
-  | { type: 'draft'; sessionId: string; text?: string; attachments?: DraftAttachments }
+  /** Parts of the chat's draft changed, by another viewer or the hub. */
+  | ({ type: 'draft'; sessionId: string } & DraftChange)
   /** Live output from a running Bash command; the tool_result still carries the final output. */
   | { type: 'bash_output'; sessionId: string; toolUseId: string; chunk: string }
   /** The calls auto mode is still deciding whether to allow; replaces the previous set. */

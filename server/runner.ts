@@ -6,6 +6,7 @@ import { IMAGE_EXTENSIONS, IMAGE_TYPES, type ChatCommand, type ChatCommandReply,
 import { BOARD_INSTRUCTIONS, BOARD_SERVER, boardOps } from './boardTools.ts'
 import { Children } from './children.ts'
 import { listModels } from './claudeProbe.ts'
+import { findFiles, listCommands } from './completions.ts'
 import { BadRequest, absolutePath, badRequest } from './errors.ts'
 import { folderSize, forgetSize, listDir, listFolders } from './folders.ts'
 import { MERGE_TOOL, mergeTool } from './merge.ts'
@@ -36,7 +37,7 @@ import { TERMINAL_INSTRUCTIONS, TERMINAL_SERVER, terminalOps } from './terminalT
 import { Terminals } from './terminals.ts'
 import { ContextReader, readAccount } from './usage.ts'
 import { baseChoices, setBase } from './base.ts'
-import { excludeWorktrees,gitPull, gitPush, gitStatus, inaccessible, removeWorktree, rootOf, worktreeStatus } from './workspace.ts'
+import { branchChoices, excludeWorktrees, gitPull, gitPush, gitStatus, gitSwitch, inaccessible, removeWorktree, rootOf, worktreeStatus } from './workspace.ts'
 
 // Merging only starts a chat in the main checkout, and that chat asks for anything risky itself.
 const MERGE_TOOL_NAME = `mcp__${BOARD_SERVER}__${MERGE_TOOL}`
@@ -223,6 +224,7 @@ export class Runner implements RunnerApi {
       id: s.id,
       cwd: s.cwd,
       running: this.manager.isRunning(s.id),
+      since: s.workingSince,
       waiting: s.waiting,
       turns: this.turns.get(s.id) ?? 0,
       agents: s.runningAgents(),
@@ -290,6 +292,14 @@ export class Runner implements RunnerApi {
     return rootOf(cwd)
   }
 
+  commands(cwd: string) {
+    return listCommands(absolutePath(cwd)).catch(badRequest)
+  }
+
+  findFiles(cwd: string, typed: string) {
+    return findFiles(absolutePath(cwd), typed).catch(badRequest)
+  }
+
   worktreeStatus(path: string) {
     return worktreeStatus(path).catch(badRequest)
   }
@@ -317,6 +327,15 @@ export class Runner implements RunnerApi {
   /** Fine while a chat is working: a fast-forward won't touch files with uncommitted changes, and Claude rereads a file that changed under it. */
   async gitPull(path: string) {
     await gitPull(path).catch(badRequest)
+  }
+
+  branchChoices(path: string) {
+    return branchChoices(path).catch(badRequest)
+  }
+
+  /** Fine while a chat is working, as pulling is: git won't switch over uncommitted changes it would lose. */
+  async gitSwitch(path: string, to: string, create: boolean) {
+    await gitSwitch(path, to, create).catch(badRequest)
   }
 
   async removeWorktree(dir: string): Promise<void> {

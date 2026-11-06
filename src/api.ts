@@ -1,9 +1,11 @@
 import { createSignal } from 'solid-js'
 import type {
   BaseChoices,
+  BranchChoices,
   Card,
   CardStatus,
   ClientEvent,
+  CommandInfo,
   GitStatus,
   Folder,
   ImageAttachment,
@@ -43,6 +45,8 @@ export const api = {
   models: () => get<ModelOption[]>('/api/models'),
   archive: (sessionId: string) => request<void>('POST', `/api/sessions/${sessionId}/archive`),
   unarchive: (sessionId: string) => request<void>('DELETE', `/api/sessions/${sessionId}/archive`),
+  /** Empties a chat's draft; one that hasn't started is gone then. */
+  discardDraft: (sessionId: string) => request<void>('DELETE', `/api/sessions/${sessionId}/draft`),
   rename: (sessionId: string, title: string) => request<void>('PUT', `/api/sessions/${sessionId}/title`, { title }),
   suggestTitle: (sessionId: string) => request<{ title: string }>('POST', `/api/sessions/${sessionId}/title/suggest`),
   /** A copy of the chat up to the end of the turn `at`, here or somewhere else. Returns the new chat's id. */
@@ -72,6 +76,9 @@ export const api = {
   baseChoices: (path: string, machine?: string) => get<BaseChoices>(`/api/git/base?${on(machine, { path })}`),
   /** A branch, '' for none, or null to work it out again. */
   setBase: (path: string, base: string | null, machine?: string) => request<void>('PUT', '/api/git/base', { path, base, machine }),
+  branches: (path: string, machine?: string) => get<BranchChoices>(`/api/git/branches?${on(machine, { path })}`),
+  /** `create` makes `to` a new branch from here. */
+  switchBranch: (path: string, to: string, create: boolean, machine?: string) => request<void>('POST', '/api/git/switch', { path, to, create, machine }),
   removeWorktree: (path: string, machine?: string) => request<void>('DELETE', `/api/worktree?${on(machine, { path })}`),
   folders: (machine?: string) => get<Folder[]>(`/api/folders?${on(machine)}`),
   addFolder: (path: string, machine?: string) => request<void>('POST', '/api/folders', { path, machine }),
@@ -88,6 +95,8 @@ export const api = {
     return res.blob()
   },
   workspace: (cwd: string, machine?: string) => get<{ root: string }>(`/api/workspace?${on(machine, { cwd })}`),
+  commands: (cwd: string, machine?: string) => get<CommandInfo[]>(`/api/commands?${on(machine, { cwd })}`),
+  findFiles: (cwd: string, q: string, machine?: string) => get<string[]>(`/api/files/find?${on(machine, { cwd, q })}`),
   createTerminal: (spec: { cwd: string; machine?: string; command?: string; cols?: number; rows?: number }) =>
     request<TerminalInfo>('POST', '/api/terminals', spec),
   restartTerminal: (id: string) => request<TerminalInfo>('POST', `/api/terminals/${id}/restart`),

@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'solid-js'
+import { api } from './api.ts'
 
 /** Opens a file beside the chat, at a line if given; `cwd` is what relative links are from. Absent where there's nowhere to open one. */
 export const OpenFile = createContext<{ open: (path: string, line?: number) => void; cwd: () => string | undefined }>()
@@ -43,10 +44,29 @@ export function fileLink(href: string, cwd: string | undefined): { path: string;
   return path ? { path, line } : undefined
 }
 
-/** A path as it is, e.g. a tool call's, made absolute from `cwd` if it's relative. Undefined if it's relative with no `cwd`. */
+/**
+ * A path as it is, e.g. a tool call's, made absolute from `cwd` if it's relative. Undefined if it's relative with no
+ * `cwd`. One in the home folder, `~/…`, stays so: only its machine knows where that is (see `expandHome`).
+ */
 export function resolvePath(path: string, cwd: string | undefined): string | undefined {
   if (path.startsWith('/')) return normalize(path)
+  if (path === '~' || path.startsWith('~/')) return `~${normalize(path.slice(1))}`.replace(/^~\/$/, '~')
   return cwd ? normalize(`${cwd}/${path}`) : undefined
+}
+
+const homes = new Map<string, Promise<string>>()
+
+/** `~/…` as the absolute path it is on `machine`, whose home folder is asked for once; any other path as it is. */
+export async function expandHome(path: string, machine: string): Promise<string> {
+  if (path !== '~' && !path.startsWith('~/')) return path
+  let home = homes.get(machine)
+  if (!home) {
+    // The file browser starts in the home folder, so listing nowhere in particular says where that is.
+    home = api.listDir(undefined, false, machine).then((l) => l.path)
+    homes.set(machine, home)
+    home.catch(() => homes.delete(machine))
+  }
+  return normalize(`${await home}${path.slice(1)}`)
 }
 
 /** `.` and `..` worked out, and doubled slashes made one. */

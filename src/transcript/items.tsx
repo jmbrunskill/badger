@@ -1,5 +1,5 @@
 import { For, Show, createSignal, onCleanup, type JSX } from 'solid-js'
-import { BookOpen, Bot, ChevronRight, CircleAlert, Columns3, FileText, KeyRound, Scissors, Webhook } from '../icons'
+import { BookOpen, Bot, ChevronRight, CircleAlert, Columns3, FileText, GitBranch, KeyRound, Scissors, Webhook } from '../icons'
 import type { CardContext } from '../../shared/cardContext.ts'
 import type { Move } from '../../shared/forkNote.ts'
 import type { CardStatus } from '../../shared/protocol.ts'
@@ -9,6 +9,8 @@ import { Link } from '../router.tsx'
 import { STATUS_LABELS } from '../stores/cards.ts'
 import { Attachments, type ContextChip } from '../components/Attachments.tsx'
 import { Markdown } from '../components/Markdown.tsx'
+import { PathLink } from '../components/PathLink.tsx'
+import { PromptText } from '../components/PromptChip.tsx'
 import { Disclosure, splitSkill } from '../components/ToolCard.tsx'
 import { LiveDot, compact, plural } from '../components/ui.tsx'
 import { duration, type Chip, type Item } from './model.ts'
@@ -140,7 +142,7 @@ export function contextChip(chip: Chip): ContextChip {
         body: () => (
           <>
             <Show when={dir}>
-              <div class="mb-1.5 font-mono text-xs text-fg-3">{dir}</div>
+              <PathLink path={`${dir}/SKILL.md`} title="Open the skill’s file as it is now" class="mb-1.5" />
             </Show>
             <Markdown text={body} />
           </>
@@ -157,7 +159,7 @@ export function contextChip(chip: Chip): ContextChip {
           <For each={chip.files}>
             {(f) => (
               <div class="mb-3 last:mb-0">
-                <div class="mb-1 font-mono text-xs text-fg-3">{f.path}</div>
+                <PathLink path={f.path} class="mb-1" />
                 <Markdown text={f.content} />
               </div>
             )}
@@ -167,6 +169,8 @@ export function contextChip(chip: Chip): ContextChip {
     }
     case 'hook':
       return { icon: Webhook, label: `${chip.hook ?? 'A'} hook`, body: () => <p class="whitespace-pre-wrap">{chip.text}</p> }
+    case 'git':
+      return { icon: GitBranch, label: 'Git changed', body: () => <p class="whitespace-pre-wrap">{chip.text}</p> }
     case 'hook_error':
       return {
         icon: CircleAlert,
@@ -226,6 +230,8 @@ export function CardContextBadge(props: { context: CardContext }) {
  */
 export function UserMessage(props: {
   text: string
+  /** It was a slash command Claude Code ran, so its first word shows as one. */
+  command?: boolean
   pastes?: string[]
   images?: ShownImage[]
   card?: CardContext
@@ -280,7 +286,7 @@ export function UserMessage(props: {
               'mask-image': clamped() ? 'linear-gradient(to bottom, black 70%, transparent)' : undefined,
             }}
           >
-            {props.text}
+            <PromptText text={props.text} command={props.command} />
           </div>
           <Show when={overflows()}>
             <button class="mt-1 text-xs text-fg-3 hover:text-fg-2" onClick={() => setExpanded(!expanded())}>

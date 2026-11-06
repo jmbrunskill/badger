@@ -120,6 +120,13 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
         return [200, { root: await query(url).runner.remote.workspaceRoot(cwd) }]
       },
     ],
+    // What the composer offers after `/` and `@`.
+    ['GET', '/api/commands', async ({ url }) => [200, await query(url).runner.remote.commands(absolutePath(url.searchParams.get('cwd')))]],
+    [
+      'GET',
+      '/api/files/find',
+      async ({ url }) => [200, await query(url).runner.remote.findFiles(absolutePath(url.searchParams.get('cwd')), url.searchParams.get('q') ?? '')],
+    ],
     [
       'GET',
       '/api/git',
@@ -144,6 +151,25 @@ function machineFileRoutes({ machines, chats, listChanged }: ApiDeps): Route[] {
         const runner = machines.fromRequest(body.machine)
         if (body.base !== null && typeof body.base !== 'string') throw new BadRequest('base must be a branch, empty for none, or null to work it out')
         await runner.remote.setBase(absolutePath(body.path), body.base)
+        return [204, null]
+      },
+    ],
+    [
+      'GET',
+      '/api/git/branches',
+      async ({ url }) => {
+        const dir = absolutePath(url.searchParams.get('path'))
+        return [200, await query(url).runner.remote.branchChoices(dir)]
+      },
+    ],
+    [
+      'POST',
+      '/api/git/switch',
+      async ({ json }) => {
+        const body = await json()
+        const runner = machines.fromRequest(body.machine)
+        if (typeof body.to !== 'string' || !body.to) throw new BadRequest('to must be a branch')
+        await runner.remote.gitSwitch(absolutePath(body.path), body.to, body.create === true)
         return [204, null]
       },
     ],

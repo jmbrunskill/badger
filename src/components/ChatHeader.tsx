@@ -1,5 +1,5 @@
-import { For, Show, createEffect, createSignal, on, onCleanup } from 'solid-js'
-import { Check, FileDiff, FolderInput, GitBranch, Pencil, Zap } from '../icons'
+import { Show, createEffect, createSignal, on, onCleanup } from 'solid-js'
+import { FileDiff, FolderInput, Zap } from '../icons'
 import type { GitStatus, SessionSummary } from '../../shared/protocol.ts'
 import type { ChatAction } from '../actions.ts'
 import { api } from '../api.ts'
@@ -7,12 +7,13 @@ import { basename, worktreeOf } from '../folders.ts'
 import { ago } from '../format.ts'
 import type { Ws } from '../terminals.ts'
 import { BasePicker, baseChanged, howText } from './BasePicker.tsx'
+import { BranchPicker } from './BranchPicker.tsx'
 import { FileChat } from './FileChat.tsx'
 import { RenameChat } from './RenameChat.tsx'
 import { TerminalButton } from './Terminals.tsx'
-import { GitSummary, gitParts } from './GitSummary.tsx'
+import { GitDetail, GitSummary } from './GitSummary.tsx'
 import { showError } from './Popover.tsx'
-import { DiffCount, Menu, ltr, plural, type MenuItem } from './ui.tsx'
+import { Menu, plural, type MenuItem } from './ui.tsx'
 import { Link } from '../router.tsx'
 import { cardOf } from '../stores/cards.ts'
 
@@ -93,11 +94,13 @@ export function ChatHeader(props: {
   const folder = () => {
     const dir = props.cwd
     if (!dir) return ''
-    return basename(worktreeOf(dir)?.repo ?? dir)
+    // A worktree's name says which of the repo's checkouts this is; the repo alone doesn't.
+    return worktreeOf(dir)?.name ?? basename(dir)
   }
 
   let gitMenu!: HTMLDivElement
   let showBases: (() => void) | undefined
+  let showBranches: (() => void) | undefined
   /** Pushes or pulls, saying what git said by the button or the git menu if it fails. */
   const transfer = async (kind: 'push' | 'pull', from: Element = gitMenu) => {
     const dir = props.cwd
@@ -180,6 +183,13 @@ export function ChatHeader(props: {
         run: () => ask('Commit the changes here.'),
       })
     }
+    if (props.cwd) {
+      items.push({
+        label: 'Switch branch',
+        description: g.branch ? `Off ${g.branch}, to another or a new one.` : 'Off this detached commit, to a branch or a new one.',
+        run: () => showBranches?.(),
+      })
+    }
     // Detached, there's nowhere to keep one.
     if (g.branch && props.cwd) {
       items.push({
@@ -197,44 +207,6 @@ export function ChatHeader(props: {
     })
     return items
   }
-
-  /** Everything the summary says, and leaves out or shrinks to icons, spelled out at the top of its menu. */
-  const detail = (g: GitStatus) => (
-    <div class="mb-1 flex flex-col gap-2 border-b border-line px-2.5 pt-2 pb-3 text-ui">
-      <div class="min-w-0">
-        <div class="flex items-center gap-1.5 font-mono text-fg">
-          <GitBranch class="size-3.5 shrink-0 text-fg-3" />
-          <span class="truncate">{g.branch || 'Detached HEAD'}</span>
-        </div>
-        <div class="mt-0.5 truncate text-left font-mono text-meta text-fg-3 [direction:rtl]">{ltr(props.cwd ?? '')}</div>
-      </div>
-      <div class="flex items-center gap-2">
-        <Pencil class="size-3.5 shrink-0 text-fg-3" />
-        <Show when={g.changes} fallback={<span class="text-fg-3">Nothing uncommitted</span>}>
-          <span class="text-fg-2">
-            {plural(g.changes, 'file')} uncommitted <DiffCount files={g.changes} added={g.added} removed={g.removed} class="ml-1" />
-          </span>
-        </Show>
-      </div>
-      <Show when={g.upstream && !g.ahead && !g.behind}>
-        <div class="flex items-center gap-2 text-fg-3">
-          <Check class="size-3.5 shrink-0" />
-          In step with {g.upstream}
-        </div>
-      </Show>
-      <For each={gitParts(g)}>
-        {(p) => (
-          <div class="flex items-start gap-2">
-            <p.icon class={`mt-0.5 size-3.5 shrink-0 ${p.tone}`} />
-            <div class="min-w-0">
-              <div class={p.tone}>{p.text}</div>
-              <div class="text-xs leading-snug text-fg-3">{p.title}</div>
-            </div>
-          </div>
-        )}
-      </For>
-    </div>
-  )
 
   const button = 'flex h-7 items-center gap-1 rounded-button-md px-2 text-xs transition-colors hover:bg-surface hover:text-fg-2 pointer-coarse:h-9'
 
@@ -275,7 +247,7 @@ export function ChatHeader(props: {
         )}
       </Show>
       {/* With a branch beside it, the next to go. */}
-      <span class={`shrink-0 text-fg-2 ${props.git ? 'hidden @2xl:block' : ''}`}>{folder()}</span>
+      <span title={props.cwd} class={`shrink-0 text-fg-2 ${props.git ? 'hidden @2xl:block' : ''}`}>{folder()}</span>
       <Show when={props.git}>
         {(g) => (
           <>
@@ -285,15 +257,20 @@ export function ChatHeader(props: {
                 items={gitItems()}
                 onPick={(i) => gitItems()[i].run()}
                 placement="bottom"
-                header={() => detail(g())}
+                header={() => <GitDetail git={g()} path={props.cwd} class="mb-1 border-b border-line px-2.5 pt-2 pb-3" />}
                 class="w-80"
                 triggerClass={(open) => `${button} max-w-full min-w-0 gap-2 ${open ? 'bg-surface' : ''}`}
                 trigger={() => <GitSummary git={g()} branch hide={primary() === 'push' ? 'ahead' : primary() === 'pull' ? 'behind' : undefined} />}
               />
             </div>
-            {/* Opened from the git menu's Base item, where the menu was, and back to its button when closed. */}
+            {/* Opened from the git menu's Base and Switch branch items, where the menu was, and back to its button when closed. */}
             <Show when={props.cwd}>
-              {(dir) => <BasePicker dir={dir()} machine={props.machine} anchor={() => gitMenu.querySelector('button') ?? gitMenu} opener={(show) => (showBases = show)} />}
+              {(dir) => (
+                <>
+                  <BasePicker dir={dir()} machine={props.machine} anchor={() => gitMenu.querySelector('button') ?? gitMenu} opener={(show) => (showBases = show)} />
+                  <BranchPicker dir={dir()} machine={props.machine} anchor={() => gitMenu.querySelector('button') ?? gitMenu} opener={(show) => (showBranches = show)} />
+                </>
+              )}
             </Show>
             <Show when={primary()}>
               {(kind) => (

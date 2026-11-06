@@ -45,7 +45,7 @@ export function CardView(props: {
     const projects = cards().filter((c) => c.parentId === null && c.id !== props.card.id && !below.has(c.id) && c.status !== 'done')
     return [null, ...projects.sort((a, b) => a.title.localeCompare(b.title))]
   })
-  // Linked ids with no transcript yet (a chat opened but never sent) are left out.
+  // Linked ids with no transcript yet are left out, unless something's typed in them: then they're drafts.
   const chats = createMemo(() => sessions().filter((s) => props.card.sessionIds.includes(s.id)))
   /**
    * Chats that could go on this card: ones on no card first, then ones it would take off another card, then archived
@@ -188,19 +188,25 @@ export function CardView(props: {
               <button onClick={() => props.onOpenChat(s.id)} class="flex min-w-0 flex-1 items-center gap-2 py-2.5 text-left">
                 <span class="min-w-0 flex-1 truncate text-ui text-fg-2 group-hover:text-fg">{s.title}</span>
                 <ChatDot running={s.running} attention={attention()[s.id]} />
+                <Show when={s.draft}>
+                  <span class="shrink-0 text-meta text-accent">Draft</span>
+                </Show>
                 <span class="max-w-[40%] shrink-0 truncate text-meta text-fg-3">{s.cwd && folderLabel(s.cwd)}</span>
                 <Show when={onMachine(s.machine)}>{(name) => <MachineName machine={s.machine} name={name()} class="text-meta text-fg-3" />}</Show>
               </button>
-              <RenameChat
-                session={s}
-                title="Rename chat"
-                triggerClass={(open) =>
-                  `grid size-6 place-items-center rounded-button-md transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100 ${
-                    open ? 'bg-surface text-fg opacity-100' : 'text-fg-3 opacity-0'
-                  }`
-                }
-                trigger={() => <Pencil class="size-3.5" />}
-              />
+              {/* A draft has no transcript to put a title in. */}
+              <Show when={!s.unstarted}>
+                <RenameChat
+                  session={s}
+                  title="Rename chat"
+                  triggerClass={(open) =>
+                    `grid size-6 place-items-center rounded-button-md transition hover:bg-surface hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:size-9 pointer-coarse:opacity-100 ${
+                      open ? 'bg-surface text-fg opacity-100' : 'text-fg-3 opacity-0'
+                    }`
+                  }
+                  trigger={() => <Pencil class="size-3.5" />}
+                />
+              </Show>
               <button
                 onClick={() => void unlinkSession(props.card.id, s.id)}
                 title="Unlink chat"

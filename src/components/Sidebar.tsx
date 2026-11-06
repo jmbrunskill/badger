@@ -10,12 +10,12 @@ import { openView, viewKey, viewShown } from '../layout.ts'
 import { LOCAL, onMachine } from '../machines.ts'
 import { navigate, route } from '../router.tsx'
 import { cardOf, cards, cardsLoaded, projectOfChat, projects } from '../stores/cards.ts'
-import { sessions, sessionsLoaded, toggleArchived } from '../stores/sessions.ts'
+import { discardDraft, parentOf, sessions, sessionsLoaded, toggleArchived } from '../stores/sessions.ts'
 import { terminalLabel, terminalTooltip, terminalWs, terminals, wsKey } from '../terminals.ts'
 import { accountUsage } from '../usage.ts'
 import { ChatSummary, MachineName } from './ChatSummary.tsx'
 import { FileChat } from './FileChat.tsx'
-import { showError } from './Popover.tsx'
+import { confirmBy, showError } from './Popover.tsx'
 import { RenameChat } from './RenameChat.tsx'
 import { StatusDot } from './Terminals.tsx'
 import { AccountLimits } from './Usage.tsx'
@@ -41,8 +41,9 @@ export function Sidebar(props: {
   )
 
   const unfiledCount = createMemo(() => sessions().filter((s) => !s.archived && !cardOf(s.id)).length)
-  /** The chat on screen is listed wherever it is. */
-  const shown = (s: SessionSummary) => !s.sideOf && (s.id === props.current || inFocus(s.id))
+  /** The chat on screen is listed wherever it is, or for a side or child chat, the chat it's under. */
+  const currentRow = createMemo(() => (props.current && parentOf(props.current)?.parent) || props.current)
+  const shown = (s: SessionSummary) => !s.sideOf && (s.id === currentRow() || inFocus(s.id))
   const active = createMemo(() => sessions().filter((s) => !s.archived && shown(s)))
   const archived = createMemo(() => sessions().filter((s) => s.archived && shown(s)))
   const [showArchived, setShowArchived] = createSignal(false)
@@ -180,9 +181,9 @@ export function Sidebar(props: {
                     {terminalLabel(t)}
                   </span>
                   <span
-                    class={`flex shrink-0 items-center gap-2 group-hover:invisible ${t.id === currentTerminal() ? 'pointer-coarse:invisible' : ''}`}
+                    class={`flex max-w-[40%] min-w-0 shrink-0 items-center gap-2 group-hover:invisible ${t.id === currentTerminal() ? 'pointer-coarse:invisible' : ''}`}
                   >
-                    <span class="text-meta text-fg-3">{basename(t.root)}</span>
+                    <span class="min-w-0 truncate text-meta text-fg-3">{basename(t.root)}</span>
                     <Show when={onMachine(t.machine)}>{(name) => <MachineName machine={t.machine} name={name()} class="text-meta text-fg-3" />}</Show>
                   </span>
                 </button>
@@ -231,7 +232,7 @@ export function Sidebar(props: {
           when={found()}
           fallback={
             <>
-              <For each={active()}>{(s) => <SessionRow session={s} current={s.id === props.current} filing={filing() === s.id} onOpenChange={keepOpen(s.id)} />}</For>
+              <For each={active()}>{(s) => <SessionRow session={s} current={s.id === props.current} onScreen={props.current} filing={filing() === s.id} onOpenChange={keepOpen(s.id)} />}</For>
               <Show when={unfiled() && sessionsLoaded() && cardsLoaded() && !active().length}>
                 <p class="px-2 py-1.5 text-ui text-fg-3">Every chat is in a project.</p>
               </Show>
@@ -243,8 +244,8 @@ export function Sidebar(props: {
                   <ChevronRight class={`size-3 transition-transform ${showArchived() ? 'rotate-90' : ''}`} />
                   Archived ({archived().length})
                 </button>
-                <For each={showArchived() ? archived() : archived().filter((s) => s.id === props.current)}>
-                  {(s) => <SessionRow session={s} current={s.id === props.current} filing={filing() === s.id} onOpenChange={keepOpen(s.id)} />}
+                <For each={showArchived() ? archived() : archived().filter((s) => s.id === currentRow())}>
+                  {(s) => <SessionRow session={s} current={s.id === props.current} onScreen={props.current} filing={filing() === s.id} onOpenChange={keepOpen(s.id)} />}
                 </For>
               </Show>
             </>
@@ -252,7 +253,7 @@ export function Sidebar(props: {
         >
           {(found) => (
             <>
-              <For each={found()}>{(s) => <SessionRow session={s} current={s.id === props.current} filing={filing() === s.id} onOpenChange={keepOpen(s.id)} />}</For>
+              <For each={found()}>{(s) => <SessionRow session={s} current={s.id === props.current} onScreen={props.current} filing={filing() === s.id} onOpenChange={keepOpen(s.id)} />}</For>
               <Show when={!found().length}>
                 <p class="px-2 py-1.5 text-ui text-fg-3">No chats match.</p>
               </Show>
@@ -270,11 +271,19 @@ function SessionRow(props: {
   session: SessionSummary
   /** It's the chat on screen. */
   current: boolean
+  /** The chat on screen, which may be one nested under this. */
+  onScreen: string | null
   /** Its project picker or rename box is open, so its buttons keep showing. */
   filing: boolean
   onOpenChange: (open: boolean) => void
 }) {
   const s = () => props.session
+  const discard = async (from: Element) => {
+    props.onOpenChange(true)
+    const sure = await confirmBy(from, { message: 'Discard this draft?', notes: ['What’s typed and attached in it is gone for good.'], action: 'Discard' })
+    props.onOpenChange(false)
+    if (sure) discardDraft(s().id).catch((e: Error) => showError("Couldn't discard it", e.message))
+  }
   return (
     <>
       <div class="group relative mb-px">
@@ -312,21 +321,31 @@ function SessionRow(props: {
             triggerClass={(open) => ghostClass('sm', open)}
             trigger={() => <FolderInput class="size-3.5" />}
           />
-          <RenameChat
-            session={s()}
-            title="Rename"
-            onOpenChange={props.onOpenChange}
-            triggerClass={(open) => ghostClass('sm', open)}
-            trigger={() => <Pencil class="size-3.5" />}
-          />
-          <GhostButton size="sm" onClick={() => toggleArchived(s()).catch((e: Error) => showError("Couldn't change it", e.message))} title={s().archived ? 'Unarchive' : 'Archive'}>
-            <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
-              <ArchiveRestore class="size-3.5" />
-            </Show>
-          </GhostButton>
+          {/* A draft has no transcript to rename or archive: it's thrown away instead. */}
+          <Show
+            when={!s().unstarted}
+            fallback={
+              <GhostButton size="sm" onClick={(e) => discard(e.currentTarget)} title="Discard draft">
+                <Trash2 class="size-3.5" />
+              </GhostButton>
+            }
+          >
+            <RenameChat
+              session={s()}
+              title="Rename"
+              onOpenChange={props.onOpenChange}
+              triggerClass={(open) => ghostClass('sm', open)}
+              trigger={() => <Pencil class="size-3.5" />}
+            />
+            <GhostButton size="sm" onClick={() => toggleArchived(s()).catch((e: Error) => showError("Couldn't change it", e.message))} title={s().archived ? 'Unarchive' : 'Archive'}>
+              <Show when={s().archived} fallback={<Archive class="size-3.5" />}>
+                <ArchiveRestore class="size-3.5" />
+              </Show>
+            </GhostButton>
+          </Show>
         </div>
       </div>
-      <NestedRows session={s()} current={props.current} />
+      <NestedRows session={s()} current={props.current} onScreen={props.onScreen} />
     </>
   )
 }
@@ -335,21 +354,35 @@ function SessionRow(props: {
 const seenNested = new Map<string, NestedChat>()
 
 /**
- * A chat's subagents and child chats under it: the ones running, and for the chat on screen, any open in a panel
- * beside it, which are lit while they are. Each opens there.
+ * A chat's nested chats under it: its subagents, child chats and side chats running, the one on screen if it's one
+ * of them, and for the chat on screen, any open in a panel beside it. Each is lit while it's on screen or in view
+ * there. A child or side chat opens as a chat of its own; a subagent, which has no page, opens in a panel.
  */
-function NestedRows(props: { session: SessionSummary; current: boolean }) {
+function NestedRows(props: { session: SessionSummary; current: boolean; onScreen: string | null }) {
   const s = () => props.session
   const ws = () => (s().root ? { machine: s().machine ?? LOCAL, root: s().root! } : undefined)
   const viewOf = (n: NestedChat) => ({ kind: 'task' as const, session: s().id, id: n.toolUseId })
-  const shown = (n: NestedChat) => props.current && !!ws() && viewShown(ws()!, s().id, viewKey(viewOf(n)))
+  const inPanel = (n: NestedChat) => props.current && !!ws() && viewShown(ws()!, s().id, viewKey(viewOf(n)))
   const rows = createMemo(() => {
     const running = s().nested ?? []
     for (const n of running) seenNested.set(`${s().id}:${n.toolUseId}`, n)
-    const open = [...seenNested].filter(([key, n]) => key.startsWith(`${s().id}:`) && !running.some((r) => r.toolUseId === n.toolUseId) && shown(n))
-    return [...running.map((n) => ({ n, running: true })), ...open.map(([, n]) => ({ n, running: false }))]
+    const open = [...seenNested].filter(([key, n]) => key.startsWith(`${s().id}:`) && !running.some((r) => r.toolUseId === n.toolUseId) && inPanel(n))
+    const sides = sessions().filter((c) => c.sideOf === s().id && c.running)
+    const rows = [
+      ...running.map((n) => ({ n, running: true })),
+      ...open.map(([, n]) => ({ n, running: false })),
+      ...sides.map((c) => ({ n: { toolUseId: '', title: c.title, sessionId: c.id }, running: true })),
+    ]
+    // Once it's done it's no longer listed as running, but while it's on screen its row stays.
+    const here = props.onScreen ? parentOf(props.onScreen) : undefined
+    if (here?.parent === s().id && !rows.some((r) => r.n.sessionId === props.onScreen)) {
+      rows.push({ n: { toolUseId: here.toolUseId ?? '', title: here.title, sessionId: props.onScreen! }, running: false })
+    }
+    return rows
   })
+  const lit = (n: NestedChat) => (n.sessionId === props.onScreen && !!n.sessionId) || inPanel(n)
   const open = (n: NestedChat) => {
+    if (n.sessionId) return navigate({ kind: 'chat', id: n.sessionId })
     if (!props.current) navigate({ kind: 'chat', id: s().id })
     const w = ws()
     if (w) openView(w, viewOf(n))
@@ -361,7 +394,7 @@ function NestedRows(props: { session: SessionSummary; current: boolean }) {
           onClick={() => open(n)}
           title={n.sessionId ? n.title : `Subagent: ${n.title}`}
           class={`mb-px ml-4 flex h-7 w-[calc(100%-1rem)] items-center gap-2 rounded-lg px-2 text-left text-ui transition-colors pointer-coarse:h-9 ${
-            shown(n) ? 'bg-surface text-fg' : 'text-fg-3 hover:bg-surface/60 hover:text-fg-2'
+            lit(n) ? 'bg-surface text-fg' : 'text-fg-3 hover:bg-surface/60 hover:text-fg-2'
           }`}
         >
           <Dynamic component={n.sessionId ? MessagesSquare : Bot} class="size-3.5 shrink-0" />

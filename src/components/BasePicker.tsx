@@ -7,6 +7,8 @@ import { SearchMenu, type SearchItem } from './ui.tsx'
 const [changes, setChanges] = createSignal(0)
 /** Goes up whenever a base is picked anywhere, so whatever shows one reads it again. */
 export const baseChanged = changes
+/** For what changes the base other than picking one, like switching branch. */
+export const touchBase = () => setChanges((n) => n + 1)
 
 export const howText: Record<BaseHow, string> = {
   set: 'picked by hand',
@@ -51,11 +53,20 @@ export function BasePicker(props: {
         pick: () => c.set !== undefined && pick(null),
       })
     }
-    for (const b of c.likely.filter((b) => matches(b.branch)))
+    const up = c.upstream
+    if (up && matches(up.branch))
+      list.push({
+        label: up.branch,
+        description: 'Where it pushes to: only what isn’t pushed yet',
+        hint: up.ahead ? `${up.ahead} to push` : 'all pushed',
+        selected: c.set === up.branch,
+        pick: () => pick(up.branch),
+      })
+    for (const b of c.likely.filter((b) => matches(b.branch) && b.branch !== up?.branch))
       list.push({ label: b.branch, hint: b.ahead ? `${b.ahead} ahead of it` : 'nothing ahead', selected: c.set === b.branch, pick: () => pick(b.branch) })
     // Every other branch only when looked for: there can be hundreds.
     if (q) for (const b of c.others.filter(matches).slice(0, 50)) list.push({ label: b, selected: c.set === b, pick: () => pick(b) })
-    if (c.set && !c.likely.some((b) => b.branch === c.set) && !list.some((i) => i.label === c.set))
+    if (c.set && c.set !== up?.branch && !c.likely.some((b) => b.branch === c.set) && !list.some((i) => i.label === c.set))
       list.push({ label: c.set, selected: true, pick: () => {} })
     if (!q || matches('none')) list.push({ label: 'None', description: 'Compare with nothing: only uncommitted changes count', selected: c.set === '', pick: () => pick('') })
     return list

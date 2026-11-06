@@ -3,21 +3,27 @@ import type { WebSocket } from 'ws'
 import { SIDE_NOTE, renderMoveNote } from '../../shared/forkNote.ts'
 import {
   LOCAL_MACHINE,
+  NO_ATTACHMENTS,
+  NO_DRAFT,
+  changeDraft,
+  hasAttachments,
   type ChatCommand,
   type ChatCommandReply,
   type ClientEvent,
-  type DraftAttachments,
+  type Draft,
+  type DraftChange,
   type ImageAttachment,
   type PermissionMode,
   type ServerEvent,
   type SessionSummary,
+  type StartAt,
   type WireMessage,
 } from '../../shared/protocol.ts'
 import type { Analytics, EventFields } from '../analytics.ts'
 import type { Attention } from '../attention.ts'
 import type { ChatInfo } from '../boardTools.ts'
 import type { Board } from '../board.ts'
-import type { ChatMeta, Draft } from '../chatMeta.ts'
+import type { ChatMeta } from '../chatMeta.ts'
 import type { Actor, Database } from '../db.ts'
 import { BadRequest, absolutePath, badRequest, message } from '../errors.ts'
 import { busyForkPoint, forkTranscript } from '../fork.ts'
@@ -145,6 +151,7 @@ export class Chats {
         machine,
         lastModified: s.lastModified,
         running: !!live?.running,
+        ...(live?.running && live.since ? { runningSince: live.since } : {}),
         archived: archived.has(s.sessionId),
         gone: !live && !!s.cwd && !!gone.get(machine ?? '')?.has(s.cwd),
         ...(reviews.has(s.sessionId) ? { review: true } : {}),
@@ -170,6 +177,29 @@ export class Chats {
         })
       }
     }
+    // A chat with something typed in it is marked, and one that hasn't started is listed for it, to be picked up again.
+    // Not one that doesn't say where it will run: those are from before drafts did, left in new chats long gone.
+    const drafts = meta.typedDrafts()
+    const placed = placement.machinesOf(drafts.map((d) => d.sessionId))
+    const byId = new Map(summaries.map((s) => [s.id, s]))
+    for (const d of drafts) {
+      const listed = byId.get(d.sessionId)
+      if (listed) listed.draft = true
+      else if (d.start && !placed.has(d.sessionId)) {
+        summaries.push({
+          id: d.sessionId,
+          title: draftTitle(d.text, d.images > 0),
+          cwd: d.start?.cwd,
+          machine: d.start?.machine,
+          lastModified: d.updatedAt,
+          running: false,
+          archived: false,
+          unstarted: true,
+          draft: true,
+        })
+      }
+    }
+    summaries.sort((a, b) => b.lastModified - a.lastModified)
     // Sent with the list so a chat's panels are known before it's opened, not looked up after.
     // A chat with no machine on record is the hub's, as the browser takes it to be.
     const roots = await Promise.all(summaries.map((s) => s.cwd && this.workspaceRoot(s.machine ?? LOCAL_MACHINE, s.cwd)))
@@ -293,12 +323,14 @@ export class Chats {
     if (!asked) this.snapshotsAsked.set(ws, (asked = new Map()))
     const n = (asked.get(sessionId) ?? 0) + 1
     asked.set(sessionId, n)
-    const { text: draft, attachments: draftAttachments } = meta.draft(sessionId)
+    const draft = meta.draft(sessionId)
     const children = meta.children(sessionId)
+    const started = meta.startedBy(sessionId)
+    const parent = started && { id: started.parentId, toolUseId: started.toolUseId, title: childTitle(started.kind) }
     const machine = placement.machineOf(sessionId)
     const [history, info] = machine ? await Promise.all([transcripts.transcript(sessionId), transcripts.info(sessionId)]) : [[], undefined]
     const runner = machine ? machines.get(machine) : undefined
-    const base = { type: 'snapshot' as const, sessionId, machine, draft, draftAttachments, children }
+    const base = { type: 'snapshot' as const, sessionId, machine, draft, children, ...(parent ? { parent } : {}) }
     const done = (live: LiveSnapshot | null, gone: boolean) => {
       if (asked.get(sessionId) !== n) return
       if (!live) {
@@ -337,14 +369,16 @@ export class Chats {
     switch (event.type) {
       case 'send':
         return this.send(ws, event)
-      case 'draft':
-        return this.saveDraft(event.sessionId, { text: event.text, attachments: event.attachments }, ws)
+      case 'draft': {
+        const { type, sessionId, ...change } = event
+        return this.editDraft(sessionId, change, ws)
+      }
       case 'unqueue': {
         const message = await command(event.sessionId, { type: 'unqueue', id: event.id })
         if (!message || !event.edit) return
         // Back into the composer, ahead of anything typed since, in every tab.
         const saved = meta.draft(event.sessionId)
-        return this.restoreDraft(event.sessionId, {
+        return this.editDraft(event.sessionId, {
           text: [message.text, saved.text].filter(Boolean).join('\n\n'),
           attachments: { ...saved.attachments, pastes: [...message.pastes, ...saved.attachments.pastes], images: [...message.images, ...saved.attachments.images] },
         })
@@ -431,8 +465,8 @@ export class Chats {
       const tab = this.d.viewers.identity(ws)
       this.d.analytics.event('chat.seen', { actor: UI, client: tab?.client, tab: tab?.tab, sessionId, data: { by: 'send' } })
     }
-    // Sending empties the composer in every tab, not just the one that sent.
-    this.saveDraft(sessionId, { text: '', attachments: { pastes: [], images: [] } }, ws)
+    // Sending empties the composer in every tab, not just the one that sent. Where a new chat starts is settled now.
+    this.editDraft(sessionId, { ...NO_DRAFT, start: null }, ws)
     placement.assign(sessionId, machine)
     // A chat that's run before resumes where it was, except a fork going into a new worktree.
     const fork = placed ? meta.forkStart(sessionId) : undefined
@@ -443,26 +477,41 @@ export class Chats {
     } catch (err) {
       // Turned away, so it never started: it can go elsewhere. Anything else, e.g. the connection dropping, it may have.
       if (!placed && err instanceof BadRequest) placement.unassign(sessionId, machine)
-      // The message goes back in the composer, unless something's been typed since.
+      // The message goes back in the composer, unless something's been typed since; for a chat that's still to start,
+      // with where it was to. Comments added since stay.
+      const start = placement.machineOf(sessionId) ? undefined : { machine, cwd: event.cwd, worktree: event.worktree !== undefined }
       const saved = meta.draft(sessionId)
-      if (!saved.text) this.restoreDraft(sessionId, { text, attachments: { ...saved.attachments, pastes, images } })
+      if (!saved.text) this.editDraft(sessionId, { text, attachments: { ...saved.attachments, pastes, images }, start })
       throw err
     }
   }
 
-  /** Stores parts of a chat's draft and shows them to the chat's other viewers; `from`, the one editing it, already has them. */
-  private saveDraft(sessionId: string, change: Partial<Draft>, from: WebSocket): void {
-    const saved = this.d.meta.draft(sessionId)
-    const same = (change.text === undefined || change.text === saved.text) && (!change.attachments || (!hasAttachments(change.attachments) && !hasAttachments(saved.attachments)))
-    if (same) return
-    this.d.meta.setDraft(sessionId, change)
-    this.d.viewers.toChat(sessionId, { type: 'draft', sessionId, ...change }, { except: from })
+  /**
+   * Changes parts of a chat's draft and shows them to its viewers, but for `from`, the one that changed them, which
+   * has them. A chat that hasn't started is listed while something's typed in it, under the start of what is.
+   */
+  private editDraft(sessionId: string, change: DraftChange, from?: WebSocket): void {
+    const { meta, placement, viewers } = this.d
+    const saved = meta.draft(sessionId)
+    const next = changeDraft(saved, change)
+    if (sameDraft(saved, next)) return
+    meta.setDraft(sessionId, next)
+    viewers.toChat(sessionId, { type: 'draft', sessionId, ...change }, { except: from })
+    // A chat that's started is marked while something's typed in it, which can wait.
+    if (placement.machineOf(sessionId)) return void (typed(saved) !== typed(next) && this.liveListChanged())
+    const [was, is] = [listing(saved), listing(next)]
+    // Coming and going shows at once, as does moving it, which is picked; a new title from typing can wait, as a running chat's does.
+    if (!was !== !is || (is && !sameStart(saved.start, next.start))) this.soonListChanged()
+    else if (was !== is) this.liveListChanged()
   }
 
-  /** Puts something back in a chat's composer, in every tab. */
-  private restoreDraft(sessionId: string, draft: Draft): void {
-    this.d.meta.setDraft(sessionId, draft)
-    this.d.viewers.toChat(sessionId, { type: 'draft', sessionId, ...draft })
+  /** Empties a chat's draft. One that hasn't started is gone then, so it comes off its card too. */
+  private discardDraft(sessionId: string): void {
+    const { board, placement } = this.d
+    this.editDraft(sessionId, { ...NO_DRAFT, start: null })
+    if (placement.machineOf(sessionId)) return
+    const card = board.cardOf(sessionId)
+    if (card && board.unlinkSession(card.id, sessionId, UI)) this.d.cardsChanged()
   }
 
   /**
@@ -536,7 +585,7 @@ export class Chats {
       meta.addFork({ sessionId: fork.sessionId, sourceId: id, cwd, worktree, note })
       if (o.side) meta.addSideChat(fork.sessionId, id)
       // e.g. the message to edit and send again.
-      if (o.draft) meta.setDraft(fork.sessionId, { text: o.draft })
+      if (o.draft) meta.setDraft(fork.sessionId, { text: o.draft, attachments: NO_ATTACHMENTS })
     })
     try {
       for (const file of fork.files) await to.remote.importTranscript(fork.sessionId, cwd, file)
@@ -545,6 +594,7 @@ export class Chats {
         placement.unassign(fork.sessionId, to.id)
         meta.removeFork(fork.sessionId)
         meta.removeSideChat(fork.sessionId)
+        meta.setDraft(fork.sessionId, NO_DRAFT)
       })
       throw err
     }
@@ -619,7 +669,7 @@ export class Chats {
     return { sessionId }
   }
 
-  /** The list, and archive, title, fork and side chat routes. Archiving only hides a chat; its transcript is left alone. */
+  /** The list, and archive, draft, title, fork and side chat routes. Archiving only hides a chat; its transcript is left alone. */
   routes(): Route[] {
     const { board, meta, transcripts, machines, placement } = this.d
     const path = (action: string) => new RegExp(`^/api/sessions/${CHAT_ID}/${action}$`)
@@ -630,6 +680,7 @@ export class Chats {
       ['POST', path('btw'), async ({ params: [id], json }) => [201, await this.btw(id, await json())]],
       ['POST', path('archive'), ({ params: [id] }) => (meta.setArchived(id, true, UI), [204, null])],
       ['DELETE', path('archive'), ({ params: [id] }) => (meta.setArchived(id, false, UI), [204, null])],
+      ['DELETE', path('draft'), ({ params: [id] }) => (this.discardDraft(id), [204, null])],
       // The title goes in the transcript, on the chat's machine, where the CLI's /resume sees it too. It comes back with the transcript.
       [
         'PUT',
@@ -720,7 +771,24 @@ export class Chats {
   }
 }
 
-const hasAttachments = (a: DraftAttachments) => a.pastes.length > 0 || a.images.length > 0 || !!a.comments?.length
+/** Whether saving `b` over `a` would change nothing. Attachments are only compared when there are none, since images can be big. */
+function sameDraft(a: Draft, b: Draft): boolean {
+  const attachments = a.attachments === b.attachments || (!hasAttachments(a.attachments) && !hasAttachments(b.attachments))
+  return a.text === b.text && attachments && sameStart(a.start, b.start)
+}
+
+const sameStart = (a?: StartAt, b?: StartAt) => a?.machine === b?.machine && a?.cwd === b?.cwd && !a?.worktree === !b?.worktree
+
+/** What a chat that hasn't started is listed as: the start of what's typed in it, or else what's attached. */
+function draftTitle(text: string, image: boolean): string {
+  const line = text.split('\n').find((l) => l.trim())?.trim() ?? ''
+  return line ? (line.length > 80 ? `${line.slice(0, 80)}…` : line) : image ? 'Image' : 'Pasted text'
+}
+
+const typed = (d: Draft) => !!d.text || hasAttachments(d.attachments)
+
+/** How a chat that hasn't started is listed with this draft: empty when it isn't, with nothing typed or attached, or nowhere to run. */
+const listing = (d: Draft) => (typed(d) && d.start ? JSON.stringify([draftTitle(d.text, d.attachments.images.length > 0), d.start]) : '')
 
 /** What a child chat is listed as under its parent, from what it's for, e.g. Merge. */
 const childTitle = (kind: string) => (kind ? kind[0].toUpperCase() + kind.slice(1) : 'Chat')

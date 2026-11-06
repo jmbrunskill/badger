@@ -1,8 +1,10 @@
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, type JSX } from 'solid-js'
 import { resolvePath, useOpenFile } from '../fileLinks.ts'
+import { PathLink } from './PathLink.tsx'
 import { highlightWhenSeen, highlighted, languageOf } from '../highlight.ts'
 import { Check, ChevronRight, CircleAlert, Loader2, Shield, Webhook } from '../icons'
 import type { Task } from '../tasks.ts'
+import { terminalLabel, terminals } from '../terminals.ts'
 import { useChecking } from '../useChat.ts'
 import { viewImages } from './ImageViewer.tsx'
 import { Markdown } from './Markdown.tsx'
@@ -83,6 +85,14 @@ export function toolSummary(name: string, input: Input, cwd?: string): string {
       return str(input.status)
     case 'mcp__badger__merge_worktree':
       return ''
+    case 'mcp__terminals__read_terminal':
+    case 'mcp__terminals__restart_terminal':
+    case 'mcp__terminals__stop_terminal':
+    case 'mcp__terminals__send_input': {
+      // By what it's called, as the terminals panel shows it; a closed one only has its id left.
+      const t = terminals().find((t) => t.id === input.id)
+      return [t ? terminalLabel(t) : str(input.id), input.text ? JSON.stringify(input.text) : ''].filter(Boolean).join(' ')
+    }
     case 'Bash':
       return str(input.description) || str(input.command)
     case 'Read':
@@ -479,7 +489,7 @@ export function ToolBody(props: ToolProps & { /** Fill the space given rather th
         {(s) => (
           <>
             <Show when={s().dir}>
-              <div class="font-mono text-xs text-fg-3">{s().dir}</div>
+              <PathLink path={`${s().dir}/SKILL.md`} title="Open the skill’s file as it is now" />
             </Show>
             <Markdown text={s().body} />
             <Hooks context={props.context} />

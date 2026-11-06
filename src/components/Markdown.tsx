@@ -63,7 +63,11 @@ function decorate(root: HTMLElement, text: string): () => void {
   return () => stops.forEach((stop) => stop())
 }
 
-export function Markdown(props: { text: string }) {
+export function Markdown(props: {
+  text: string
+  /** Where an image it links to is fetched from, e.g. one beside the file it's in; undefined leaves it as written. */
+  image?: (src: string) => string | undefined
+}) {
   let el!: HTMLDivElement
   const files = useOpenFile()
   const onClick = (e: MouseEvent) => {
@@ -87,6 +91,13 @@ export function Markdown(props: { text: string }) {
     // A diagram is drawn again in the new colours when the theme changes.
     if (hasDiagram(props.text)) appliedPalette()
     el.innerHTML = render(props.text)
+    const image = props.image
+    if (image)
+      for (const img of el.querySelectorAll('img')) {
+        const src = img.getAttribute('src')
+        const url = src && image(src)
+        if (url) img.src = url
+      }
     onCleanup(decorate(el, props.text))
   })
   return <div ref={el} class="md" onClick={onClick} />

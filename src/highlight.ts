@@ -63,6 +63,29 @@ export async function highlight(code: string, lang: string | undefined, keep = t
   }
 }
 
+export type Tokens = { length: number; style: string }[][]
+
+/** Only the latest few: it's for code being typed, so most are a keystroke old. */
+const tokenCache = new Map<string, Tokens | undefined>()
+
+/**
+ * Code as its lines' tokens, each its length and style, for an editor to colour where it is: undefined when there's
+ * nothing to highlight it as, or it's too long. A block that hasn't changed since it was last asked about is free.
+ */
+export async function tokens(code: string, lang: string | undefined): Promise<Tokens | undefined> {
+  if (!lang || code.length > MAX) return
+  const key = `${lang}\0${code}`
+  if (tokenCache.has(key)) return tokenCache.get(key)
+  try {
+    const found = await (await load()).toTokens(code, lang)
+    if (tokenCache.size >= 20) tokenCache.delete(tokenCache.keys().next().value!)
+    tokenCache.set(key, found)
+    return found
+  } catch (e) {
+    console.warn(`Couldn't highlight ${lang}`, e)
+  }
+}
+
 /**
  * Between highlights of code that's still arriving, at least: a long file would otherwise be highlighted whole every
  * frame. Each highlight runs on the page's thread, so the gap after one is twice as long as it took, at least, leaving
